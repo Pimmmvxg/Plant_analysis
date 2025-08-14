@@ -202,3 +202,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 -e "\n# PlantCV debug\ndebug/\ndebug_images/\noutput/\nresults/" 
+
+
+notebooks/datasets/
+scripts/results/
