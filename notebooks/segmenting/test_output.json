@@ -1,0 +1,15 @@
+{
+  "metadata": {
+    "run_date": {
+      "datatype": "<class 'str'>",
+      "value": ["2025-08-01T16:34:50.576041Z"]
+    },
+    "plantcv_version": { "datatype": "<class 'str'>", "value": ["4.8"] },
+    "run_date_1": {
+      "datatype": "<class 'str'>",
+      "value": ["2025-08-06T08:28:16.000219Z"]
+    },
+    "plantcv_version_1": { "datatype": "<class 'str'>", "value": ["4.8"] }
+  },
+  "observations": {}
+}
