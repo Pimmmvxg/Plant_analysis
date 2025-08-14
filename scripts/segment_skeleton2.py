@@ -9,11 +9,104 @@ import pandas as pd
 from plantcv import plantcv as pcv
 
 INPUT_PATH   = r"C:\Cantonese\Test"         # folder OR single image path
-OUTPUT_DIR   = r".\results"            # output folder (relative to this script by default)
+OUTPUT_DIR   = r".\results2"            # output folder (relative to this script by default)
 EXTENSIONS   = ['.png']                # allowed image extensions (lowercase recommended)       
 THREADS      = 1                       # start with 1; increase after it works (Windows-safe)
 DEBUG_MODE   = 'print'                 # 'none' | 'print' | 'plot
 SAVE_MASK    = False                   # save mask/processed image example
+
+def auto_select_mask(rgb_img):
+    import numpy as np, cv2
+    from plantcv import plantcv as pcv
+
+    H, W = rgb_img.shape[:2]
+    area_total = H * W
+
+    # ----- 1) candidate gray channels -----
+    chans = []
+    try:  chans.append(("lab_a", pcv.rgb2gray_lab(rgb_img=rgb_img, channel='a')))
+    except: pass
+    try:  chans.append(("lab_b", pcv.rgb2gray_lab(rgb_img=rgb_img, channel='b')))
+    except: pass
+    try:  chans.append(("lab_l", pcv.rgb2gray_lab(rgb_img=rgb_img, channel='l')))
+    except: pass
+    try:  chans.append(("hsv_v", pcv.rgb2gray_hsv(rgb_img=rgb_img, channel='v')))
+    except: pass
+    try:  chans.append(("hsv_s", pcv.rgb2gray_hsv(rgb_img=rgb_img, channel='s')))
+    except: pass
+    if not chans:
+        raise RuntimeError("No grayscale channels available for auto selection.")
+
+    # ----- 2) threshold methods to try -----
+    methods = []
+    for name, g in chans:
+        try: g = pcv.transform.rescale(gray_img=g, lower=0, upper=255)
+        except: pass
+        methods += [
+            (name, "otsu",     {"object_type":"dark"}),
+            (name, "otsu",     {"object_type":"light"}),
+            (name, "triangle", {"object_type":"dark"}),
+            (name, "triangle", {"object_type":"light"}),
+        ]
+        for k in (31, 51, 101):
+            methods += [(name, ("gaussian", k, 0, "dark"),  {}),
+                        (name, ("gaussian", k, 0, "light"), {})]
+
+    candidates = []
+    for name, meth, params in methods:
+        try:
+            gray = next(g for nm, g in chans if nm == name)
+            if meth == "otsu":
+                m = pcv.threshold.otsu(gray_img=gray, **params)
+                used = ("otsu", params["object_type"], None)
+            elif meth == "triangle":
+                m = pcv.threshold.triangle(gray_img=gray, **params)
+                used = ("triangle", params["object_type"], None)
+            else:
+                _, k, off, obj = meth
+                m = pcv.threshold.gaussian(gray_img=gray, ksize=k, offset=off, object_type=obj)
+                used = ("gaussian", obj, k)
+
+            area = int(np.count_nonzero(m))
+            ratio = area / max(area_total, 1)
+
+            _fc = cv2.findContours(m.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours = _fc[2] if len(_fc) == 3 else _fc[0]
+            n_comp = len(contours)
+            if n_comp > 0:
+                areas = [cv2.contourArea(c) for c in contours]
+                cnt = contours[int(np.argmax(areas))]
+                hull = cv2.convexHull(cnt)
+                a_obj  = float(cv2.contourArea(cnt))
+                a_hull = float(cv2.contourArea(hull))
+                solidity = (a_obj / a_hull) if a_hull > 0 else 0.0
+            else:
+                solidity = 0.0
+
+            # ----- 3) scoring -----
+            def score_area(r):
+                if 0.02 <= r <= 0.6:
+                    return 2.0 - abs(0.30 - r)
+                return 0.5 - abs(0.30 - r)
+            s = score_area(ratio)
+            s -= 0.1 * max(0, n_comp - 1)
+            s += 0.5 * solidity
+
+            candidates.append((s, name, used, m, ratio, n_comp, solidity))
+        except Exception:
+            continue
+
+    if not candidates:
+        fallback = pcv.threshold.otsu(gray_img=pcv.rgb2gray_lab(rgb_img=rgb_img, channel='a'), object_type='dark')
+        return fallback, {"channel":"lab_a","method":"otsu","object_type":"dark","ksize":None,
+                          "area_ratio": float(np.count_nonzero(fallback))/max(area_total,1),
+                          "n_components": 0, "solidity": 0.0}
+
+    best = max(candidates, key=lambda x: x[0])
+    _, name, used, mask, ratio, n_comp, solidity = best
+    method, objtype, ksize = used
+    return mask, {"channel":name,"method":method,"object_type":objtype,"ksize":ksize,
+                  "area_ratio": float(ratio), "n_components": int(n_comp), "solidity": float(solidity)}
 
 def segment(rgb_img, filename):
     # --- Tunable parameters (safe defaults) ---
@@ -28,27 +121,95 @@ def segment(rgb_img, filename):
     PRUNE_SIZE_2  = 50
     ROI_TYPE      = 'partial'    # or 'cutto' / 'largest'
 
-    # --- 1) Colorspace + 'a' channel + histogram (debug only) ---
-    _ = pcv.visualize.colorspaces(rgb_img=rgb_img, original_img=False)
-    a = pcv.rgb2gray_lab(rgb_img=rgb_img, channel='a')
-    _ = pcv.visualize.histogram(img=a)
-
-    # --- 2) Threshold on 'a' channel ---
-    thresh = pcv.threshold.gaussian(
-        gray_img=a, ksize=GAUSS_KSIZE, offset=GAUSS_OFFSET, object_type='dark'
+    mask0, info = auto_select_mask(rgb_img)
+    
+    pcv.outputs.add_observation(
+    sample='default',
+    variable='auto_channel',
+    trait='text',
+    method='auto_select',
+    scale='none',
+    datatype=str,               # หรือ 'str' ก็ได้ในบางเวอร์ชัน
+    value=info['channel'],
+    label='channel'
     )
-    mask_dilated = pcv.dilate(gray_img=thresh, ksize=DILATE_KSIZE, i=DILATE_ITER)
 
-    # ถ้ามี PlantCV morphology.close ใช้ได้เลย; ถ้าไม่มีใช้ OpenCV แทน
+    pcv.outputs.add_observation(
+        sample='default',
+        variable='auto_method',
+        trait='text',
+        method='auto_select',
+        scale='none',
+        datatype=str,
+        value=info['method'],
+        label='method'
+    )
+
+    pcv.outputs.add_observation(
+        sample='default',
+        variable='auto_object_type',
+        trait='text',
+        method='auto_select',
+        scale='none',
+        datatype=str,
+        value=info['object_type'],
+        label='object_type'
+    )
+
+    pcv.outputs.add_observation(
+        sample='default',
+        variable='auto_ksize',
+        trait='text',
+        method='auto_select',
+        scale='none',
+        datatype=str,
+        value=str(info['ksize']),
+        label='ksize'
+    )
+
+    pcv.outputs.add_observation(
+        sample='default',
+        variable='auto_area_ratio',
+        trait='ratio',
+        method='auto_select',
+        scale='none',
+        datatype=float,
+        value=float(info['area_ratio']),
+        label='area_ratio'
+    )
+
+    pcv.outputs.add_observation(
+        sample='default',
+        variable='auto_n_components',
+        trait='count',
+        method='auto_select',
+        scale='count',
+        datatype=int,
+        value=int(info['n_components']),
+        label='components'
+    )
+
+    pcv.outputs.add_observation(
+        sample='default',
+        variable='auto_solidity',
+        trait='ratio',
+        method='auto_select',
+        scale='none',
+        datatype=float,
+        value=float(info['solidity']),
+        label='solidity'
+    )
+
+    
+    mask_dilated = pcv.dilate(gray_img=mask0, ksize=2, i=1)
     try:
-        mask_closed = pcv.morphology.close(mask=mask_dilated, ksize=5, shape='ellipse')
+        mask_closed = pcv.close(mask=mask_dilated, ksize=5, shape='ellipse')
     except Exception:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         mask_closed = cv2.morphologyEx(mask_dilated, cv2.MORPH_CLOSE, kernel)
-
-    mask_fill = pcv.fill(bin_img=mask_closed, size=FILL_SIZE)
-
-    # --- 3) Safe ROI (clamped) & crop view (optional) ---
+    mask_fill = pcv.fill(bin_img=mask_closed, size=30)
+    
+    #ROI selection
     H, W = rgb_img.shape[:2]
     if USE_FULL_IMAGE_ROI:
         x, y, w, h = 0, 0, W, H
@@ -58,33 +219,31 @@ def segment(rgb_img, filename):
         w = max(1, min(ROI_W, W - x))
         h = max(1, min(ROI_H, H - y))
 
-    # draw/display ROI for debug
-    _ = pcv.roi.rectangle(img=rgb_img, x=x, y=y, w=w, h=h)
-    
+    _ = pcv.roi.rectangle(img=rgb_img, x=x, y=y, w=w, h=h)  # debug only
+
     _fc = cv2.findContours(mask_fill.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if len(_fc) == 3:
+    if len(_fc) == 3:  # OpenCV 3
         _, contours, hierarchy = _fc
-    else:
+    else:             # OpenCV 4
         contours, hierarchy = _fc
-        
+
     roi_rect = (x, y, w, h)
-    def intersects(bbox, roi): # check if bbox intersects with roi
+    def intersects(bbox, roi):
         bx, by, bw, bh = bbox
         rx, ry, rw, rh = roi
         return not (bx + bw <= rx or rx + rw <= bx or by + bh <= ry or ry + rh <= by)
-    
+
     kept_contours = []
     for cnt in contours:
-        bx, by, bw, bh = cv2.boundingRect(cnt)
-        if intersects((x, y, w, h), roi_rect):
+        bx, by, bw, bh = cv2.boundingRect(cnt)     # ← ใช้ bx/by/bw/bh ไม่ให้ทับ ROI
+        if intersects((bx, by, bw, bh), roi_rect): # ← เทียบ bbox ของ object กับ ROI
             kept_contours.append(cnt)
-            
+
     partial_mask = np.zeros_like(mask_fill, dtype=np.uint8)
     if kept_contours:
         cv2.drawContours(partial_mask, kept_contours, -1, 255, thickness=cv2.FILLED)
-        
     mask_fill = partial_mask
-
+    
     # --- 5) Skeleton + prune twice ---
     skeleton = pcv.morphology.skeletonize(mask=mask_fill)
     sizes = [50, 75, 100, 125, 150, 175, 200, 250, 300, 350, 400]
