@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 # ========== CONFIG ==========
 INPUT_PATH   = r"C:\Cantonese\topview_test.jpg"   # ไฟล์เดียว หรือโฟลเดอร์
-OUTPUT_DIR   = r".\results_topview"
+OUTPUT_DIR   = r".\results_multi_topview"
 EXTENSIONS   = ['.png', '.jpg', '.jpeg']
 THREADS      = 1
 DEBUG_MODE   = 'print'        # 'none'|'print'|'plot'  

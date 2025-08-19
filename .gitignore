@@ -4,3 +4,6 @@ scripts/results/
 scripts/results2/
 results_topview/
 results2/
+plant_analyze/results_topview/
+plant_analyze/__pycache__/
+scripts/results_multi_topview/

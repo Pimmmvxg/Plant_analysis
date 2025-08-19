@@ -296,7 +296,7 @@ def auto_threshold(rgb_img, roi_rect):
 
 # ------------------ ROI grid (partial, no clip) ------------------
 def _roi_grid_masks(rgb_img):
-    """สร้างกริด ROI แล้วคืนหน้ากาก 'พื้นที่ช่อง' สำหรับวัดการทับซ้อน (ไม่ clip พืช)"""
+    """สร้างกริด ROI แล้วคืนหน้ากาก 'พื้นที่ช่อง' สำหรับวัดการทับซ้อน """
     H, W = rgb_img.shape[:2]
     xN = GRID_X + (COLS - 1) * DX
     yN = GRID_Y + (ROWS - 1) * DY
@@ -334,6 +334,10 @@ def _analyze_plant_metrics(
     plant_mask = _to_binary(plant_mask)
     area_px = _count(plant_mask)
     skel = pcv.morphology.skeletonize(mask=plant_mask)
+    # บันทึกรูปสเกเลตันดิบ (ก่อน prune) ไว้ดูประกอบ
+    if debug_dir is not None and plant_id is not None:
+        with temp_debug('print', os.path.join(debug_dir, f"plant_{plant_id}")):
+            _ = pcv.morphology.find_tips(skel_img=skel, mask=plant_mask, label=f"plant_{plant_id}_raw_skeleton")
 
     def _easy_metrics(status_tag):
         branch_pts = pcv.morphology.find_branch_pts(skel_img=skel, mask=plant_mask, label="plant_tmp")
@@ -360,8 +364,12 @@ def _analyze_plant_metrics(
                 outdir = os.path.join(debug_dir, f"plant_{plant_id}")
             else:
                 outdir = pcv.params.debug_outdir  # เผื่อกรณีไม่ได้ส่งมา
+                
+            os.makedirs(outdir, exist_ok=True)
 
+            # <<< ครอบทุกขั้นตอนที่อยากให้มีรูป debug >>>
             with temp_debug('print', outdir):
+                # 1) prune
                 ret = pcv.morphology.prune(skel_img=skel, size=sz, mask=plant_mask)
                 if isinstance(ret, tuple):
                     if len(ret) == 3: pruned_skel, _seg_img, edge_objects = ret
@@ -370,16 +378,23 @@ def _analyze_plant_metrics(
                 else:
                     pruned_skel = ret
 
-            lo = pcv.morphology.segment_sort(skel_img=pruned_skel, objects=edge_objects, mask=plant_mask)
-            leaf_obj = lo[0] if isinstance(lo, tuple) else lo
-            stem_obj = lo[1] if isinstance(lo, tuple) and len(lo) > 1 else None
-            sid = pcv.morphology.segment_id(skel_img=pruned_skel, objects=leaf_obj, mask=plant_mask)
-            segmented_img = sid[0] if isinstance(sid, tuple) else sid
+                # 2) segment + id
+                lo = pcv.morphology.segment_sort(skel_img=pruned_skel, objects=edge_objects, mask=plant_mask)
+                leaf_obj = lo[0] if isinstance(lo, tuple) else lo
+                stem_obj = lo[1] if isinstance(lo, tuple) and len(lo) > 1 else None
+                sid = pcv.morphology.segment_id(skel_img=pruned_skel, objects=leaf_obj, mask=plant_mask)
+                segmented_img = sid[0] if isinstance(sid, tuple) else sid
 
-            _ = pcv.morphology.fill_segments(mask=plant_mask, objects=leaf_obj, label="plant_tmp")
-            branch_pts_mask = pcv.morphology.find_branch_pts(skel_img=pruned_skel, mask=plant_mask, label="plant_tmp")
-            _ = pcv.morphology.segment_euclidean_length(segmented_img=segmented_img, objects=leaf_obj, label="plant_tmp")
-            _ = pcv.analyze.size(img=None, labeled_mask=plant_mask, label="plant_tmp")
+                # 3) metrics / overlays ที่ปล่อยรูป debug ได้
+                _ = pcv.morphology.fill_segments(mask=plant_mask, objects=leaf_obj, label=f"plant_{plant_id or 'tmp'}")
+                branch_pts_mask = pcv.morphology.find_branch_pts(
+                    skel_img=pruned_skel, mask=plant_mask, label=f"plant_{plant_id or 'tmp'}"
+                )
+                _ = pcv.morphology.segment_euclidean_length(
+                    segmented_img=segmented_img, objects=leaf_obj, label=f"plant_{plant_id or 'tmp'}"
+                )
+                _ = pcv.analyze.size(img=None, labeled_mask=plant_mask, label=f"plant_{plant_id or 'tmp'}")
+            # <<< จบครอบ >>>
 
             return dict(
                 status="ok",
@@ -389,6 +404,7 @@ def _analyze_plant_metrics(
                 num_branch_points=int(np.count_nonzero(branch_pts_mask)) if branch_pts_mask is not None else 0,
                 skeleton_len_px=None,
             )
+
         except Exception as e:
             last_err = e
             msg = str(e).lower()
