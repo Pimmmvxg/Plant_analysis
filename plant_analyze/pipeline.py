@@ -5,21 +5,11 @@ import numpy as np
 from plantcv import plantcv as pcv
 from . import config as cfg
 from .io_utils import safe_readimage
-from .masking import auto_select_mask, clean_mask
+from .masking import auto_select_mask, clean_mask, ensure_binary
 from .roi_top import make_grid_rois
 from .roi_side import make_side_roi
 from .analyze_top import analyze_one_top, add_global_density_and_color
 from .analyze_side import analyze_one_side
-
-def ensure_binary(mask):
-    if mask is None:
-        return None
-    m = np.asarray(mask)
-    if m.dtype != np.uint8:
-        m = m.astype(np.uint8)
-        
-    m = np.where(m > 0, 255, 0).astype(np.uint8)
-    return m
 
 def run_one_image(rgb_img, filename):
     # 1) auto mask
@@ -44,17 +34,28 @@ def run_one_image(rgb_img, filename):
     # 2) clean mask
     mask_dilated = pcv.dilate(gray_img=mask0, ksize=2, i=1)
     try:
-        mask_closed = pcv.close(mask=mask_dilated, ksize=5, shape='ellipse')
+        mask_closed = pcv.close(gray_img=mask_dilated, ksize=5, shape='ellipse')
     except Exception:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         mask_closed = cv2.morphologyEx(mask_dilated, cv2.MORPH_CLOSE, kernel)
         
     mask_closed = ensure_binary(mask_closed)
+    print("DEBUG side mask_closed:",mask_closed.dtype, np.unique(mask_closed)[:5])
     mask_fill = pcv.fill(bin_img=mask_closed, size=30)
     mask_fill = clean_mask(mask_fill, close_ksize=5, min_obj_size=30)   
-    mask_fill = ensure_binary(mask_fill)  
+    mask_fill = ensure_binary(mask_fill) 
+    print("DEBUG side mask_fill:",mask_fill.dtype, np.unique(mask_fill)[:5])
+
     
     if cfg.VIEW == "top":
+        print("DEBUG entering TOP pipeline")
+        try:
+            rois, eff_r = make_grid_rois(
+                rgb_img, cfg.ROWS, cfg.COLS, getattr(cfg, "ROI_RADIUS", None)
+            )
+        except Exception as e:
+            raise RuntimeError(f"make_grid_rois failed: {e}")
+        print("DEBUG rois:", len(rois), "eff_r:", eff_r)
         # ภาพรวมทั้งภาพ (ความหนาแน่น + สี)
         add_global_density_and_color(rgb_img, mask_fill)
         # วางกริดและวิเคราะห์รายช่อง
@@ -67,19 +68,43 @@ def run_one_image(rgb_img, filename):
             cv2.drawContours(slot, [roi_cnt], -1, 255, thickness=cv2.FILLED)
 
             slot_mask = cv2.bitwise_and(mask_fill, slot)
+
+            if slot_mask.ndim == 3:
+                slot_mask = cv2.cvtColor(slot_mask, cv2.COLOR_BGR2GRAY)
+
             slot_mask = ensure_binary(slot_mask)
+
+            if i < 3:
+                print(
+                    f"DEBUG top slot_mask[{i}]:",
+                    slot_mask.dtype, np.unique(slot_mask)[:5],
+                    slot_mask.shape, "nz=", int(cv2.countNonZero(slot_mask))
+                )
 
             if cv2.countNonZero(slot_mask) == 0:
                 continue
 
+            # รวมลง union (ยังคงเป็น uint8 0/255)
             union_mask = cv2.bitwise_or(union_mask, slot_mask)
+            union_mask = ensure_binary(union_mask)
 
             r = i // cfg.COLS + 1
             c = i % cfg.COLS + 1
             sample_name = f"slot_{r}_{c}"
 
-            analyze_one_top(slot_mask, sample_name, eff_r, rgb_img)
+            # จับ error ภายใน analyze_one_top พร้อมบริบท mask
+            try:
+                analyze_one_top(slot_mask, sample_name, eff_r, rgb_img)
+            except Exception as e:
+                u = np.unique(slot_mask)[:5]
+                raise RuntimeError(
+                    f"analyze_one_top failed on {sample_name}: {e} | "
+                    f"dtype={slot_mask.dtype}, unique={u}, shape={slot_mask.shape}, "
+                    f"nz={cv2.countNonZero(slot_mask)}"
+                )
+
             slots_with_obj += 1
+
         
         if slots_with_obj == 0:
             raise RuntimeError("No objects inside any ROI cell.")
@@ -94,18 +119,33 @@ def run_one_image(rgb_img, filename):
         return extra, union_mask
     
     else: # side
-        slot_mask, (x, y, w, h) = make_side_roi(rgb_img, mask_fill, cfg.USE_FULL_IMAGE_ROI,
-                                                cfg.ROI_X, cfg.ROI_Y, cfg.ROI_W, cfg.ROI_H)
-        slot_mask = ensure_binary(slot_mask)
-        if slot_mask is None or cv2.countNonZero(slot_mask) == 0:
-            raise RuntimeError("No objects inside side ROI.")
-        analyze_one_side(slot_mask, "default", rgb_img)
-        extra = {
-            "filename": filename,
-            "view": "side",
-            "roi_rect": f"({x},{y},{w},{h})",
-        }
-        return extra, slot_mask
+        slot_mask, (x, y, w, h) = make_side_roi(
+        rgb_img, mask_fill, cfg.USE_FULL_IMAGE_ROI,
+        cfg.ROI_X, cfg.ROI_Y, cfg.ROI_W, cfg.ROI_H
+    )
+
+    # ถ้าเผลอเป็น 3-channel (H,W,3) บังคับแปลงเป็นเทา
+    if slot_mask is None:
+        raise RuntimeError("make_side_roi returned None for slot_mask.")
+    if slot_mask.ndim == 3:
+        slot_mask = cv2.cvtColor(slot_mask, cv2.COLOR_BGR2GRAY)
+
+    slot_mask = ensure_binary(slot_mask)
+
+    # DEBUG: ให้เห็น dtype, unique, shape, และจำนวนพิกเซลที่เป็น 1
+    print("DEBUG side slot_mask:", slot_mask.dtype, np.unique(slot_mask)[:5],
+          slot_mask.shape, "nz=", int(cv2.countNonZero(slot_mask)))
+
+    if cv2.countNonZero(slot_mask) == 0:
+        raise RuntimeError("No objects inside side ROI.")
+        
+    analyze_one_side(slot_mask, "default", rgb_img)
+    extra = {
+        "filename": filename,
+        "view": "side",
+        "roi_rect": f"({x},{y},{w},{h})",
+    }
+    return extra, slot_mask
     
 def process_one(path: Path, out_dir: Path):
     pcv.params.debug = cfg.DEBUG_MODE

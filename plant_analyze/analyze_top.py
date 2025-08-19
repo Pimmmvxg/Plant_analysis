@@ -66,6 +66,14 @@ def add_global_density_and_color(rgb_img, mask_fill):
                                 datatype=str, value=main_color, label='color name')
 
 def analyze_one_top(slot_mask, sample_name, eff_r, rgb_img):
+    if slot_mask is None:
+        raise RuntimeError("slot_mask is None (top)")
+    if slot_mask.ndim == 3:
+        slot_mask = cv2.cvtColor(slot_mask, cv2.COLOR_BGR2GRAY)
+    if slot_mask.dtype != np.uint8:
+        slot_mask = slot_mask.astype(np.uint8)
+    slot_mask = np.where(slot_mask > 0, 255, 0).astype(np.uint8)
+    
     area_px = int(cv2.countNonZero(slot_mask))
     roi_area_est = float(np.pi * (eff_r ** 2))
     coverage_local = area_px / max(roi_area_est, 1.0)
