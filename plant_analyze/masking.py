@@ -12,32 +12,46 @@ def ensure_binary(mask):
     m = np.where(m > 0, 255, 0).astype(np.uint8)
     return m
 
-def _largest_component(bin_img):
-    bin_img = ensure_binary(bin_img)
-    if bin_img is None or cv2.countNonZero(bin_img) == 0:
-        return bin_img
-    _fc = cv2.findContours(bin_img.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if len(_fc) == 3:
-        _, cnts, _ = _fc
-    else:
-        cnts, _ = _fc
-    if not cnts:
-        return bin_img
-    idx = int(np.argmax([cv2.contourArea(c) for c in cnts]))
-    out = np.zeros_like(bin_img, dtype=np.uint8)
-    cv2.drawContours(out, [cnts[idx]], -1, 255, thickness=cv2.FILLED)
+def _keep_top_k_components(m: np.ndarray, k: int) -> np.ndarray:
+    #เก็บ k ก้อนใหญ่ที่สุด
+    m = ensure_binary(m)
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+    if num <= 1:
+        return m
+    # stats[:, cv2.CC_STAT_AREA] = area ของแต่ละ label (label 0 = background)
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    order = np.argsort(areas)[::-1]  # ใหญ่ → เล็ก
+    keep = order[:k] + 1            # ขยับ +1 เพราะเราตัด background ออกแล้ว
+    out = np.zeros_like(m)
+    for lab in keep:
+        out[labels == lab] = 255
     return ensure_binary(out)
 
-def clean_mask(m, close_ksize=7, min_obj_size=120):
+def clean_mask(m, close_ksize=7, min_obj_size=120, keep_largest=False, keep_top_k=None):
+    """
+    ทำความสะอาดมาสก์:
+    - ปิดรู/เชื่อมช่องว่างด้วย morphological close (ขนาด kernel = close_ksize)
+    - กรองสิ่งเล็กกว่า min_obj_size ออก (ด้วย pcv.fill)
+    - เลือกคงเฉพาะก้อนใหญ่สุด หรือ k ก้อนใหญ่สุดได้ (ถ้าต้องการ)
+    """
     if m is None:
         return m
     m = ensure_binary(m)
-    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_ksize, close_ksize))
+
+    # 1) close
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(close_ksize), int(close_ksize)))
     m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, k, iterations=1)
-    m = _largest_component(m)
-    m = pcv.fill(bin_img=m, size=min_obj_size)
-    m = ensure_binary(m)
-    return m
+
+    # 2) ตัดสิ่งเล็ก ๆ/อุดรู (ปรับเกณฑ์ได้ด้วย min_obj_size)
+    m = pcv.fill(bin_img=m, size=int(min_obj_size))
+
+    # 3) (ทางเลือก) คงเฉพาะก้อนใหญ่สุด หรือ k ก้อนใหญ่สุด
+    if keep_top_k is not None and int(keep_top_k) >= 1:
+        m = _keep_top_k_components(m, int(keep_top_k))
+    elif keep_largest:
+        m = _keep_top_k_components(m, 1)
+
+    return ensure_binary(m)
 
 def auto_select_mask(rgb_img):
     H, W = rgb_img.shape[:2]

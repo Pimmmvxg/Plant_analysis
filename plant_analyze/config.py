@@ -17,6 +17,7 @@ EXTENSIONS = ['.png', '.jpg', '.jpeg']  # Supported image file extensions
 #TOP
 ROWS, COLS = 2, 3
 ROI_TYPE = "partial" # 'partial' | 'cutto' | 'largest'
+ROI_RADIUS = 200 
 
 
 # SIDE (rectangle ROI)

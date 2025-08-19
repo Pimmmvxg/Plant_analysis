@@ -34,7 +34,7 @@ def run_one_image(rgb_img, filename):
     # 2) clean mask
     mask_dilated = pcv.dilate(gray_img=mask0, ksize=2, i=1)
     try:
-        mask_closed = pcv.close(gray_img=mask_dilated, ksize=5, shape='ellipse')
+        mask_closed = pcv.close(mask=mask_dilated, ksize=5, shape='ellipse')
     except Exception:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         mask_closed = cv2.morphologyEx(mask_dilated, cv2.MORPH_CLOSE, kernel)
@@ -45,8 +45,50 @@ def run_one_image(rgb_img, filename):
     mask_fill = clean_mask(mask_fill, close_ksize=5, min_obj_size=30)   
     mask_fill = ensure_binary(mask_fill) 
     print("DEBUG side mask_fill:",mask_fill.dtype, np.unique(mask_fill)[:5])
+    plant_size = int(cv2.countNonZero(mask_fill))
+    per_slot_area = 0  # ไว้ก่อนลูป labels
 
-    
+    for j in range(1, n_labels + 1):
+        single = np.where(labeled_mask == j, 255, 0).astype(np.uint8)
+        if cv2.countNonZero(single) < getattr(cfg, "MIN_PLANT_AREA", 200):
+            continue
+
+        # ขนาดต่อ plant (px)
+        area_px = int(cv2.countNonZero(single))
+        per_slot_area += area_px
+
+        # เก็บเป็น observation ระดับ plant
+        pcv.outputs.add_observation(
+            sample=sample_name,                # f"slot_{r}_{c}_obj{j}"
+            variable="area_px",
+            trait="area",
+            method="countNonZero",
+            scale="px",
+            datatype=int,
+            value=area_px,
+            label="area_px"
+        )
+
+        # (ของเดิม) union + analyze_one_top
+        union_mask = cv2.bitwise_or(union_mask, single)
+        union_mask = ensure_binary(union_mask)
+        analyze_one_top(single, sample_name, eff_r, rgb_img)
+        per_slot_count += 1
+        slots_with_obj += 1
+
+    # หลังจบลูป label ของ slot นี้ → บันทึกพื้นที่รวมต่อช่อง
+    pcv.outputs.add_observation(
+        sample=f"slot_{r}_{c}",
+        variable="slot_area_sum_px",
+        trait="area",
+        method="sum(label_area)",
+        scale="px",
+        datatype=int,
+        value=int(per_slot_area),
+        label="slot_area_sum_px",
+    )
+
+
     if cfg.VIEW == "top":
         print("DEBUG entering TOP pipeline")
         try:
@@ -56,56 +98,89 @@ def run_one_image(rgb_img, filename):
         except Exception as e:
             raise RuntimeError(f"make_grid_rois failed: {e}")
         print("DEBUG rois:", len(rois), "eff_r:", eff_r)
-        # ภาพรวมทั้งภาพ (ความหนาแน่น + สี)
+        
+        overlay = rgb_img.copy()
+        for cnt in rois:
+            cv2.drawContours(overlay, [cnt], -1, (0, 255, 0), 2)
+
+        base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
+        save_dir = Path(base) / "processed"
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        out_path = save_dir / f"{Path(filename).stem}_rois.png"
+        cv2.imwrite(str(out_path), overlay)
+        print("Saved ROI overlay to", out_path)
+
+        # วิเคราะห์ภาพรวมทั้งภาพ (ความหนาแน่น + สี)
         add_global_density_and_color(rgb_img, mask_fill)
-        # วางกริดและวิเคราะห์รายช่อง
-        rois, eff_r = make_grid_rois(rgb_img, cfg.ROWS, cfg.COLS, getattr(cfg, "ROI_RADIUS", None))
+
+        # เตรียมตัวแปรก่อนลูป
         union_mask = np.zeros_like(mask_fill, dtype=np.uint8)
         slots_with_obj = 0
-        
+
         for i, roi_cnt in enumerate(rois):
-            slot = np.zeros_like(mask_fill, dtype=np.uint8)
-            cv2.drawContours(slot, [roi_cnt], -1, 255, thickness=cv2.FILLED)
+            # หาศูนย์กลาง ROI จาก contour (เพื่อสร้าง ROI แบบวงกลมของ PlantCV)
+            M = cv2.moments(roi_cnt)
+            if M["m00"] == 0:
+                continue
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
 
-            slot_mask = cv2.bitwise_and(mask_fill, slot)
+            # 1) สร้าง ROI (Objects dataclass) ด้วย PlantCV
+            roi = pcv.roi.circle(img=rgb_img, x=cx, y=cy, r=int(eff_r))
 
-            if slot_mask.ndim == 3:
-                slot_mask = cv2.cvtColor(slot_mask, cv2.COLOR_BGR2GRAY)
+            # 2) คัดมาสก์ด้วย ROI แบบ "partial" (ทับบางส่วนก็เอาทั้งก้อน) — v4 แทนที่ roi_objects
+            #    คืนค่าเป็น binary mask ของวัตถุที่ผ่านเกณฑ์ใน ROI นั้น
+            filtered_mask = pcv.roi.filter(mask=mask_fill, roi=roi, roi_type="partial")  # v4
+            filtered_mask = ensure_binary(filtered_mask)
 
-            slot_mask = ensure_binary(slot_mask)
-
-            if i < 3:
-                print(
-                    f"DEBUG top slot_mask[{i}]:",
-                    slot_mask.dtype, np.unique(slot_mask)[:5],
-                    slot_mask.shape, "nz=", int(cv2.countNonZero(slot_mask))
-                )
-
-            if cv2.countNonZero(slot_mask) == 0:
+            if cv2.countNonZero(filtered_mask) == 0:
                 continue
 
-            # รวมลง union (ยังคงเป็น uint8 0/255)
-            union_mask = cv2.bitwise_or(union_mask, slot_mask)
-            union_mask = ensure_binary(union_mask)
+            # 3) แยกเป็นรายออบเจ็กต์ด้วยฉลาก (label) — v4 วิธีใหม่สำหรับ multi-object
+            labeled_mask, n_labels = pcv.create_labels(mask=filtered_mask, rois=None)    # v4
+            try:
+                result = pcv.create_labels(mask=filtered_mask, rois=None)
+                if isinstance(result, tuple):
+                    labeled_mask, n_labels = result
+                else:
+                    labeled_mask, n_labels = result, int(labeled_mask.max())
+            except Exception as e:
+                print("create_labels failed:", e)
+                continue
+            if n_labels <= 0:
+                continue
 
             r = i // cfg.COLS + 1
             c = i % cfg.COLS + 1
-            sample_name = f"slot_{r}_{c}"
+            per_slot_count = 0
 
-            # จับ error ภายใน analyze_one_top พร้อมบริบท mask
-            try:
-                analyze_one_top(slot_mask, sample_name, eff_r, rgb_img)
-            except Exception as e:
-                u = np.unique(slot_mask)[:5]
-                raise RuntimeError(
-                    f"analyze_one_top failed on {sample_name}: {e} | "
-                    f"dtype={slot_mask.dtype}, unique={u}, shape={slot_mask.shape}, "
-                    f"nz={cv2.countNonZero(slot_mask)}"
-                )
+            # 4) วนวิเคราะห์รายต้น (label เริ่มที่ 1)
+            for j in range(1, n_labels + 1):
+                single = np.where(labeled_mask == j, 255, 0).astype(np.uint8)
+                if cv2.countNonZero(single) < getattr(cfg, "MIN_PLANT_AREA", 200):
+                    continue
 
-            slots_with_obj += 1
+                union_mask = cv2.bitwise_or(union_mask, single)
+                union_mask = ensure_binary(union_mask)
 
-        
+                sample_name = f"slot_{r}_{c}_obj{j}"
+                analyze_one_top(single, sample_name, eff_r, rgb_img)
+                per_slot_count += 1
+                slots_with_obj += 1
+
+            pcv.outputs.add_observation(
+                sample=f"slot_{r}_{c}",
+                variable="n_plants_in_slot",
+                trait="count",
+                method="roi_partial_v4",
+                scale="none",
+                datatype=int,
+                value=int(per_slot_count),
+                label="count",
+            )
+
+        # หลังจบลูป
         if slots_with_obj == 0:
             raise RuntimeError("No objects inside any ROI cell.")
         extra = {
@@ -117,6 +192,8 @@ def run_one_image(rgb_img, filename):
             "n_slots_with_objects": int(slots_with_obj),
         }
         return extra, union_mask
+
+
     
     else: # side
         slot_mask, (x, y, w, h) = make_side_roi(
