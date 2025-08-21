@@ -12,8 +12,6 @@ def add_global_density_and_color(rgb_img, mask_fill):
     total_px = mask_fill.size
     white_px = int(cv2.countNonZero(mask_fill))
     coverage_ratio = white_px / max(total_px, 1)
-
-
     _fc = cv2.findContours(mask_fill.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     contours = _fc[2] if len(_fc) == 3 else _fc[0]
     n_comp = len(contours)
@@ -37,24 +35,24 @@ def add_global_density_and_color(rgb_img, mask_fill):
     v_mean, v_std, v_med = _safe_starts(v.astype(np.float32))
     main_color = get_color_name(h_med)
     
-    pcv.outputs.add_observation(sample='default', variable='global_coverage_ratio',
+    pcv.outputs.add_observation(sample='default', variable='all_coverage_ratio',
                                 trait='ratio', method='count_nonzero/size', scale='none',
                                 datatype=float, value=float(coverage_ratio), label='coverage')
-    pcv.outputs.add_observation(sample='default', variable='global_n_components',
+    pcv.outputs.add_observation(sample='default', variable='all_n_components',
                                 trait='count', method='findContours', scale='count',
                                 datatype=int, value=int(n_comp), label='components')
-    pcv.outputs.add_observation(sample='default', variable='global_comp_area_mean',
+    pcv.outputs.add_observation(sample='default', variable='all_comp_area_mean',
                                 trait='area', method='mean(contourArea)', scale='px',
                                 datatype=float, value=float(a_mean), label='mean component area')
-    pcv.outputs.add_observation(sample='default', variable='global_comp_area_median',
+    pcv.outputs.add_observation(sample='default', variable='all_comp_area_median',
                                 trait='area', method='median(contourArea)', scale='px',
                                 datatype=float, value=float(a_med), label='median component area')
-    pcv.outputs.add_observation(sample='default', variable='global_big_solidity',
+    pcv.outputs.add_observation(sample='default', variable='all_big_solidity',
                                 trait='ratio', method='largest(area)/convexHull', scale='none',
                                 datatype=float, value=float(big_solidity), label='largest solidity')
     
     for (nm, val) in [
-        ('hua_mean', h_mean), ('hua_std', h_std), ('hua_median', h_med),
+        ('hue_mean', h_mean), ('hue_std', h_std), ('hue_median', h_med),
         ('saturation_mean', s_mean), ('saturation_std', s_std), ('saturation_median', s_med),
         ('value_mean', v_mean), ('value_std', v_std), ('value_median', v_med)
     ]:
@@ -65,7 +63,7 @@ def add_global_density_and_color(rgb_img, mask_fill):
                                 trait='text', method='HSV median(name)', scale='none',
                                 datatype=str, value=main_color, label='color name')
 
-def analyze_one_top(slot_mask, sample_name, eff_r, rgb_img):
+def analyze_one_top(slot_mask, sample_name, eff_r, rgb_img): 
     if slot_mask is None:
         raise RuntimeError("slot_mask is None (top)")
     if slot_mask.ndim == 3:
@@ -79,9 +77,10 @@ def analyze_one_top(slot_mask, sample_name, eff_r, rgb_img):
     coverage_local = area_px / max(roi_area_est, 1.0)
     
     perim = 0.0
-    convext_ratio = 0.0
+    convex_ratio = 0.0
     circularity = 0.0
     extent = 0.0
+    
     _fc = cv2.findContours(slot_mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     contours = _fc[2] if len(_fc) == 3 else _fc[0]
     if contours:

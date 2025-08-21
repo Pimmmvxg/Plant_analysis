@@ -7,3 +7,6 @@ results2/
 plant_analyze/results_topview/
 plant_analyze/__pycache__/
 scripts/results_multi_topview/
+results_sideview/
+results_sideview_final/
+results_topview/

@@ -1,63 +1,119 @@
+# masking.py
 import cv2
-import numpy as np 
+import numpy as np
 from plantcv import plantcv as pcv
+from pathlib import Path
+from . import config as cfg
 
-def ensure_binary(mask):
+
+# ---------- Core helpers ----------
+def ensure_binary(mask, normalize_orientation: bool = True):
+    """
+    ทำให้มาสก์เป็นภาพช่องเทาไบนารี 0/255
+    และ (ค่าเริ่มต้น) เลือก orientation ที่เหมาะกว่าโดยอัตโนมัติ
+    ให้ "วัตถุ = ขาว (255), พื้นหลัง = ดำ (0)"
+    """
     if mask is None:
         return None
     m = np.asarray(mask)
+
+    # บังคับเป็นช่องเทา uint8
+    if m.ndim == 3:
+        m = cv2.cvtColor(m, cv2.COLOR_BGR2GRAY)
     if m.dtype != np.uint8:
         m = m.astype(np.uint8)
-    # บังคับให้มีแค่ 0/255
+
+    # บีบให้มีแค่ 0/255
     m = np.where(m > 0, 255, 0).astype(np.uint8)
-    return m
+
+    if not normalize_orientation:
+        return m
+
+    # ลองกลับด้าน แล้วเลือกด้านที่ "สมเหตุสมผล" กว่า
+    m_inv = cv2.bitwise_not(m)
+
+    def _score(mm: np.ndarray) -> float:
+        H, W = mm.shape[:2]
+        area_total = max(H * W, 1)
+        ratio = float(cv2.countNonZero(mm)) / area_total
+
+        # นับคอนทัวร์ + วัด solidity ของก้อนใหญ่สุด
+        _fc = cv2.findContours(mm.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours = _fc[2] if len(_fc) == 3 else _fc[0]
+        n_comp = len(contours)
+        if n_comp > 0:
+            areas = [cv2.contourArea(c) for c in contours]
+            cnt = contours[int(np.argmax(areas))]
+            hull = cv2.convexHull(cnt)
+            a_obj = float(cv2.contourArea(cnt))
+            a_hull = float(cv2.contourArea(hull)) if hull is not None else 0.0
+            solidity = (a_obj / a_hull) if a_hull > 0 else 0.0
+        else:
+            solidity = 0.0
+
+        # ให้คะแนน: ใกล้ 0.30 ดี, ชิ้นส่วนน้อยดี, solidity สูงดี
+        return (1.0 - abs(0.30 - ratio)) - 0.1 * max(0, n_comp - 1) + 0.5 * solidity
+
+    return m if _score(m) >= _score(m_inv) else m_inv
+
 
 def _keep_top_k_components(m: np.ndarray, k: int) -> np.ndarray:
-    #เก็บ k ก้อนใหญ่ที่สุด
-    m = ensure_binary(m)
+    """เก็บ k ก้อนใหญ่ที่สุด (connected components)"""
+    m = ensure_binary(m, normalize_orientation=False)
     num, labels, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
     if num <= 1:
         return m
-    # stats[:, cv2.CC_STAT_AREA] = area ของแต่ละ label (label 0 = background)
+    # label 0 = พื้นหลัง
     areas = stats[1:, cv2.CC_STAT_AREA]
-    order = np.argsort(areas)[::-1]  # ใหญ่ → เล็ก
-    keep = order[:k] + 1            # ขยับ +1 เพราะเราตัด background ออกแล้ว
+    order = np.argsort(areas)[::-1]   # ใหญ่ -> เล็ก
+    keep = order[:k] + 1              # ชดเชย background
     out = np.zeros_like(m)
     for lab in keep:
         out[labels == lab] = 255
-    return ensure_binary(out)
+    return ensure_binary(out, normalize_orientation=False)
 
-def clean_mask(m, close_ksize=7, min_obj_size=120, keep_largest=False, keep_top_k=None):
+
+# ---------- Public APIs ----------
+def clean_mask(m, close_ksize=3, min_obj_size=50, keep_largest=False, keep_top_k=None):
     """
     ทำความสะอาดมาสก์:
     - ปิดรู/เชื่อมช่องว่างด้วย morphological close (ขนาด kernel = close_ksize)
-    - กรองสิ่งเล็กกว่า min_obj_size ออก (ด้วย pcv.fill)
-    - เลือกคงเฉพาะก้อนใหญ่สุด หรือ k ก้อนใหญ่สุดได้ (ถ้าต้องการ)
+    - กรองสิ่งเล็กกว่า min_obj_size ออก (pcv.fill)
+    - (ทางเลือก) คงเฉพาะก้อนใหญ่สุด หรือ k ก้อนใหญ่สุด
+    - บังคับ orientation สุดท้ายเป็น วัตถุ=ขาว
     """
     if m is None:
         return m
-    m = ensure_binary(m)
+
+    # Normalize ตั้งแต่ต้นน้ำ
+    m = ensure_binary(m, normalize_orientation=True)
 
     # 1) close
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(close_ksize), int(close_ksize)))
     m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, k, iterations=1)
 
-    # 2) ตัดสิ่งเล็ก ๆ/อุดรู (ปรับเกณฑ์ได้ด้วย min_obj_size)
+    # 2) กรองจุดเล็ก/อุดรู
     m = pcv.fill(bin_img=m, size=int(min_obj_size))
 
-    # 3) (ทางเลือก) คงเฉพาะก้อนใหญ่สุด หรือ k ก้อนใหญ่สุด
+    # 3) เลือกเฉพาะก้อนใหญ่ (ถ้าต้องการ)
     if keep_top_k is not None and int(keep_top_k) >= 1:
         m = _keep_top_k_components(m, int(keep_top_k))
     elif keep_largest:
         m = _keep_top_k_components(m, 1)
 
-    return ensure_binary(m)
+    # ย้ำ orientation หลัง post-process
+    return ensure_binary(m, normalize_orientation=True)
+
 
 def auto_select_mask(rgb_img):
+    """
+    เลือกมาสก์อัตโนมัติจากหลายช่องสี/วิธี threshold
+    คืนค่า: (mask_binary_normalized, meta_dict)
+    """
     H, W = rgb_img.shape[:2]
     area_total = H * W
 
-    # 1) เตรียมช่องสี
+    # 1) เตรียมช่องสี (LAB/HSV) + rescale ปลอดภัย
     chans = []
     for nm, fn, kw in [
         ("lab_a", pcv.rgb2gray_lab, {'channel': 'a'}),
@@ -71,17 +127,27 @@ def auto_select_mask(rgb_img):
             try:
                 g = pcv.transform.rescale(gray_img=g, min_value=0, max_value=255)
                 if g.dtype != np.uint8:
-                    g = cv2.normalize(g, None, 0, 255, cv2.NORM_MINMAX)
-                    g = g.astype(np.uint8)
-
+                    g = cv2.normalize(g, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
             except Exception:
+                # ถ้า rescale ล้มเหลว ใช้ค่าเดิม
                 pass
             chans.append((nm, g))
         except Exception:
-            pass
+            continue
 
     if not chans:
-        raise RuntimeError("No grayscale channels available for auto selection.")
+        # ไม่มีช่องสีให้ลองเลย → fallback (ยังคง normalize orientation)
+        fb = pcv.threshold.otsu(gray_img=pcv.rgb2gray_lab(rgb_img=rgb_img, channel='a'), object_type='dark')
+        fb = ensure_binary(fb, normalize_orientation=True)
+        return fb, {
+            "channel": "lab_a",
+            "method": "otsu",
+            "object_type": "dark",
+            "ksize": None,
+            "area_ratio": float(np.count_nonzero(fb)) / max(area_total, 1),
+            "n_components": 0,
+            "solidity": 0.0,
+        }
 
     # 2) เตรียมชุด threshold ที่จะลอง
     methods = []
@@ -92,13 +158,13 @@ def auto_select_mask(rgb_img):
             (name, ("triangle", None,  None, "dark")),
             (name, ("triangle", None,  None, "light")),
         ]
-        for ksz in (31, 51, 101):
+        for ksz in (31, 51, 101, 75, 120):
             methods += [
                 (name, ("gaussian", ksz, 0, "dark")),
                 (name, ("gaussian", ksz, 0, "light")),
             ]
 
-    # 3) ลองทุก candidate + ให้คะแนน + เก็บ metadata (method,obj_type,ksize)
+    # 3) ลองทุก candidate + ให้คะแนน + เก็บ metadata
     candidates = []
     for name, spec in methods:
         try:
@@ -112,7 +178,7 @@ def auto_select_mask(rgb_img):
             else:  # gaussian
                 m = pcv.threshold.gaussian(gray_img=gray, ksize=ksz, offset=off, object_type=obj_type)
 
-            m = ensure_binary(m)
+            m = ensure_binary(m, normalize_orientation=True)
 
             _fc = cv2.findContours(m.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             contours = _fc[2] if len(_fc) == 3 else _fc[0]
@@ -121,36 +187,39 @@ def auto_select_mask(rgb_img):
                 areas = [cv2.contourArea(c) for c in contours]
                 cnt = contours[int(np.argmax(areas))]
                 hull = cv2.convexHull(cnt)
-                a_obj  = float(cv2.contourArea(cnt))
+                a_obj = float(cv2.contourArea(cnt))
                 a_hull = float(cv2.contourArea(hull)) if hull is not None else 0.0
                 solidity = (a_obj / a_hull) if a_hull > 0 else 0.0
             else:
                 solidity = 0.0
 
-            ratio = int(np.count_nonzero(m)) / max(area_total, 1)
+            ratio = float(np.count_nonzero(m)) / max(area_total, 1)
 
-            def score_area(r):
-                return 1.0 - abs(0.3 - r)
+            # เกณฑ์ให้คะแนน: ใกล้ 0.30 ดี, ชิ้นส่วนน้อยดี, solidity สูงดี
+            score = (1.0 - abs(0.30 - ratio)) - 0.1 * max(0, n_comp - 1) + 0.5 * solidity
 
-            score = score_area(ratio) - 0.1 * max(0, n_comp - 1) + 0.5 * solidity
-            # เก็บ method meta ไว้ใน candidate ด้วย
             candidates.append((score, name, m, ratio, n_comp, solidity, kind, obj_type, ksz))
         except Exception:
             continue
 
-    # 4) เลือกตัวที่ดีที่สุด + คืน metadata ใ
+    # 4) เลือกตัวที่ดีที่สุด + คืนผล (normalize แล้ว)
     if not candidates:
         fb = pcv.threshold.otsu(gray_img=pcv.rgb2gray_lab(rgb_img=rgb_img, channel='a'), object_type='dark')
-        fb = ensure_binary(fb)
+        fb = ensure_binary(fb, normalize_orientation=True)
         return fb, {
-            "channel": "lab_a", "method": "otsu", "object_type": "dark", "ksize": None,
+            "channel": "lab_a",
+            "method": "otsu",
+            "object_type": "dark",
+            "ksize": None,
             "area_ratio": float(np.count_nonzero(fb)) / max(area_total, 1),
-            "n_components": 0, "solidity": 0.0
+            "n_components": 0,
+            "solidity": 0.0,
         }
 
     best = max(candidates, key=lambda x: x[0])
     _, name, mask, ratio, n_comp, solidity, kind, obj_type, ksz = best
-    return ensure_binary(mask), {
+    m_final = ensure_binary(mask, normalize_orientation=True)
+    return m_final, {
         "channel": name,
         "method": kind,
         "object_type": obj_type,
@@ -159,3 +228,108 @@ def auto_select_mask(rgb_img):
         "n_components": int(n_comp),
         "solidity": float(solidity),
     }
+def _gray_from_channel(rgb_img, ch: str):
+    ch = (ch or "").lower()
+    if ch in ("lab_a", "lab-b", "laba"):
+        return pcv.rgb2gray_lab(rgb_img=rgb_img, channel='a')
+    if ch in ("lab_b", "lab-b", "labb"):
+        return pcv.rgb2gray_lab(rgb_img=rgb_img, channel='b')
+    if ch in ("lab_l", "lab-l", "labl"):
+        return pcv.rgb2gray_lab(rgb_img=rgb_img, channel='l')
+    if ch in ("hsv_h", "h", "hue"):
+        return pcv.rgb2gray_hsv(rgb_img=rgb_img, channel='h')
+    if ch in ("hsv_s", "s", "sat"):
+        return pcv.rgb2gray_hsv(rgb_img=rgb_img, channel='s')
+    if ch in ("hsv_v", "v", "val"):
+        return pcv.rgb2gray_hsv(rgb_img=rgb_img, channel='v')
+    # ค่าเริ่มต้น: lab_a
+    return pcv.rgb2gray_lab(rgb_img=rgb_img, channel='a')
+
+def _summarize_mask(mask_bin):
+    m = ensure_binary(mask_bin, normalize_orientation=True)
+    H, W = m.shape[:2]
+    area_total = max(H*W, 1)
+    area_ratio = float(cv2.countNonZero(m)) / area_total
+
+    _fc = cv2.findContours(m.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours = _fc[2] if len(_fc) == 3 else _fc[0]
+    n_comp = len(contours)
+    solidity = 0.0
+    if n_comp > 0:
+        areas = [cv2.contourArea(c) for c in contours]
+        cnt = contours[int(np.argmax(areas))]
+        hull = cv2.convexHull(cnt)
+        a_obj = float(cv2.contourArea(cnt))
+        a_hull = float(cv2.contourArea(hull)) if hull is not None else 0.0
+        solidity = (a_obj / a_hull) if a_hull > 0 else 0.0
+    return m, area_ratio, n_comp, solidity
+
+def _mask_from_spec(rgb_img, spec: dict):
+    ch = spec.get("channel", "lab_a")
+    method = (spec.get("method", "otsu") or "otsu").lower()
+    obj = spec.get("object_type", "dark") or "dark"
+    ksize = spec.get("ksize", None)
+    offset = spec.get("offset", 0)
+
+    gray = _gray_from_channel(rgb_img, ch)
+    if method == "otsu":
+        m = pcv.threshold.otsu(gray_img=gray, object_type=obj)
+    elif method == "triangle":
+        m = pcv.threshold.triangle(gray_img=gray, object_type=obj)
+    else:
+        if not ksize:
+            raise ValueError("MASK_SPEC requires 'ksize' for gaussian.")
+        m = pcv.threshold.gaussian(gray_img=gray, ksize=int(ksize), offset=int(offset), object_type=obj)
+
+    m, area_ratio, n_comp, solidity = _summarize_mask(m)
+    info = {
+        "source": "manual_spec",
+        "channel": str(ch),
+        "method": str(method),
+        "object_type": str(obj),
+        "ksize": int(ksize) if ksize is not None else None,
+        "area_ratio": float(area_ratio),
+        "n_components": int(n_comp),
+        "solidity": float(solidity),
+    }
+    return m, info
+
+def _mask_from_file(path_str: str):
+    p = Path(path_str)
+    if not p.exists():
+        raise FileNotFoundError(f"MASK_PATH not found: {p}")
+    raw = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)
+    m, area_ratio, n_comp, solidity = _summarize_mask(raw)
+    info = {
+        "source": "manual_file",
+        "channel": "file",
+        "method": "file",
+        "object_type": "n/a",
+        "ksize": None,
+        "area_ratio": float(area_ratio),
+        "n_components": int(n_comp),
+        "solidity": float(solidity),
+        "mask_path": str(p),
+    }
+    return m, info
+
+def get_initial_mask(rgb_img):
+    # 1) ใช้ไฟล์มาสก์ถ้ากำหนด
+    if getattr(cfg, "MASK_PATH", None):
+        try:
+            return _mask_from_file(cfg.MASK_PATH)
+        except Exception as e:
+            print("WARN: MASK_PATH failed, fallback to next mode:", e)
+
+    # 2) ใช้สเปก threshold ถ้ากำหนด
+    if getattr(cfg, "MASK_SPEC", None):
+        try:
+            return _mask_from_spec(rgb_img, cfg.MASK_SPEC)
+        except Exception as e:
+            print("WARN: MASK_SPEC failed, fallback to auto:", e)
+
+    # 3) ไม่ได้กำหนด → auto
+    m, info = auto_select_mask(rgb_img)
+    info = dict(info or {})
+    info["source"] = "auto"
+    return ensure_binary(m), info

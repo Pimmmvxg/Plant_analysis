@@ -5,31 +5,42 @@ import numpy as np
 from plantcv import plantcv as pcv
 from . import config as cfg
 from .io_utils import safe_readimage
-from .masking import auto_select_mask, clean_mask, ensure_binary
+from .masking import clean_mask, ensure_binary, get_initial_mask
 from .roi_top import make_grid_rois
 from .roi_side import make_side_roi
 from .analyze_top import analyze_one_top, add_global_density_and_color
-from .analyze_side import analyze_one_side
+from .analyze_side import analyze_one_side, _analyze_color_side
 
 def run_one_image(rgb_img, filename):
-    # 1) auto mask
-    mask0, info = auto_select_mask(rgb_img)
-    if cv2.countNonZero(mask0) > mask0.size / 2:
-        mask0 = pcv.invert(gray_img=mask0)
+    # 1) initial mask (auto ถ้าไม่กำหนด, manual ถ้าตั้ง MASK_PATH/MASK_SPEC)
+    mask0, info = get_initial_mask(rgb_img)
     mask0 = ensure_binary(mask0)
 
+    # บันทึกที่มา (auto | manual_file | manual_spec)
+    pcv.outputs.add_observation(sample='default', variable='mask_source',
+                                trait='text', method='mask_select', scale='none',
+                                datatype=str, value=info.get('source', 'auto'), label='mask_source')
+
+    # เก็บข้อมูลเมตาเดิมไว้เหมือนเคย (ใช้ key เดิมเพื่อความเข้ากันได้)
     for k, v, trait, dt in [
-        ('auto_channel', info['channel'], 'text', str),
-        ('auto_method', info['method'], 'text', str),
-        ('auto_object_type', info['object_type'], 'text', str),
-        ('auto_ksize', str(info['ksize']), 'text', str),
-        ('auto_area_ratio', float(info['area_ratio']), 'ratio', float),
-        ('auto_n_components', int(info['n_components']), 'count', int),
-        ('auto_solidity', float(info['solidity']), 'ratio', float),
+        ('auto_channel', info.get('channel'), 'text', str),
+        ('auto_method', info.get('method'), 'text', str),
+        ('auto_object_type', info.get('object_type'), 'text', str),
+        ('auto_ksize', str(info.get('ksize')), 'text', str),
+        ('auto_area_ratio', float(info.get('area_ratio', 0.0)), 'ratio', float),
+        ('auto_n_components', int(info.get('n_components', 0)), 'count', int),
+        ('auto_solidity', float(info.get('solidity', 0.0)), 'ratio', float),
     ]:
         pcv.outputs.add_observation(sample='default', variable=k, trait=trait,
-                                    method='auto_select', scale='none',
+                                    method='mask_select', scale='none',
                                     datatype=dt, value=v, label=k)
+
+    # ถ้าเป็น manual_file ให้เก็บ path ไว้ด้วย (เผื่อ debug/trace)
+    if 'mask_path' in info:
+        pcv.outputs.add_observation(sample='default', variable='mask_path',
+                                    trait='text', method='mask_select', scale='none',
+                                    datatype=str, value=info['mask_path'], label='mask_path')
+
 
     # 2) clean mask
     mask_dilated = pcv.dilate(gray_img=mask0, ksize=2, i=1)
@@ -40,161 +51,166 @@ def run_one_image(rgb_img, filename):
         mask_closed = cv2.morphologyEx(mask_dilated, cv2.MORPH_CLOSE, kernel)
         
     mask_closed = ensure_binary(mask_closed)
-    print("DEBUG side mask_closed:",mask_closed.dtype, np.unique(mask_closed)[:5])
+    _dbg = lambda *a: (print(*a) if getattr(cfg, "DEBUG_MODE", "none") == "print" else None)
+    _dbg("DEBUG mask_closed:", mask_closed.dtype, np.unique(mask_closed)[:5])
+
     mask_fill = pcv.fill(bin_img=mask_closed, size=30)
-    mask_fill = clean_mask(mask_fill, close_ksize=5, min_obj_size=30)   
-    mask_fill = ensure_binary(mask_fill) 
-    print("DEBUG side mask_fill:",mask_fill.dtype, np.unique(mask_fill)[:5])
+    mask_fill = clean_mask(mask_fill, close_ksize=5, min_obj_size=30)
+    mask_fill = ensure_binary(mask_fill)
+    _dbg("DEBUG mask_fill:", mask_fill.dtype, np.unique(mask_fill)[:5])
+
+    # --- ขนาดรวมทั้งภาพ (px) ---
     plant_size = int(cv2.countNonZero(mask_fill))
-    per_slot_area = 0  # ไว้ก่อนลูป labels
-
-    for j in range(1, n_labels + 1):
-        single = np.where(labeled_mask == j, 255, 0).astype(np.uint8)
-        if cv2.countNonZero(single) < getattr(cfg, "MIN_PLANT_AREA", 200):
-            continue
-
-        # ขนาดต่อ plant (px)
-        area_px = int(cv2.countNonZero(single))
-        per_slot_area += area_px
-
-        # เก็บเป็น observation ระดับ plant
-        pcv.outputs.add_observation(
-            sample=sample_name,                # f"slot_{r}_{c}_obj{j}"
-            variable="area_px",
-            trait="area",
-            method="countNonZero",
-            scale="px",
-            datatype=int,
-            value=area_px,
-            label="area_px"
-        )
-
-        # (ของเดิม) union + analyze_one_top
-        union_mask = cv2.bitwise_or(union_mask, single)
-        union_mask = ensure_binary(union_mask)
-        analyze_one_top(single, sample_name, eff_r, rgb_img)
-        per_slot_count += 1
-        slots_with_obj += 1
-
-    # หลังจบลูป label ของ slot นี้ → บันทึกพื้นที่รวมต่อช่อง
     pcv.outputs.add_observation(
-        sample=f"slot_{r}_{c}",
-        variable="slot_area_sum_px",
-        trait="area",
-        method="sum(label_area)",
-        scale="px",
-        datatype=int,
-        value=int(per_slot_area),
-        label="slot_area_sum_px",
+        sample='default', variable='plant_size',
+        trait='area', method='mask_pixel_count', scale='px',
+        datatype=int, value=plant_size, label='plant_size'
     )
 
+    def _area_mm2_from_px(px_area: int):
+        if hasattr(cfg, "MM_PER_PX") and cfg.MM_PER_PX:
+            mm_per_px = float(cfg.MM_PER_PX)
+            return float(px_area) * (mm_per_px ** 2)
+        if hasattr(cfg, "DPI") and cfg.DPI:
+            px_per_mm = float(cfg.DPI) / 25.4
+            return float(px_area) / (px_per_mm ** 2)
+        return None
 
+    mm2_total = _area_mm2_from_px(plant_size)
+    if mm2_total is not None:
+        pcv.outputs.add_observation(
+            sample='default', variable='plant_area_mm2',
+            trait='area', method='px_to_mm2', scale='mm2',
+            datatype=float, value=float(mm2_total), label='plant_area_mm2'
+        )
+
+    #Top view
     if cfg.VIEW == "top":
-        print("DEBUG entering TOP pipeline")
+        _dbg("DEBUG entering TOP pipeline")
         try:
             rois, eff_r = make_grid_rois(
                 rgb_img, cfg.ROWS, cfg.COLS, getattr(cfg, "ROI_RADIUS", None)
             )
         except Exception as e:
             raise RuntimeError(f"make_grid_rois failed: {e}")
-        print("DEBUG rois:", len(rois), "eff_r:", eff_r)
-        
+        _dbg("DEBUG rois:", len(rois), "eff_r:", eff_r)
+
+        # (optional) เซฟ overlay
         overlay = rgb_img.copy()
         for cnt in rois:
             cv2.drawContours(overlay, [cnt], -1, (0, 255, 0), 2)
-
         base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
-        save_dir = Path(base) / "processed"
-        save_dir.mkdir(parents=True, exist_ok=True)
+        (Path(base) / "processed").mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(Path(base) / "processed" / f"{Path(filename).stem}_rois.png"), overlay)
 
-        out_path = save_dir / f"{Path(filename).stem}_rois.png"
-        cv2.imwrite(str(out_path), overlay)
-        print("Saved ROI overlay to", out_path)
-
-        # วิเคราะห์ภาพรวมทั้งภาพ (ความหนาแน่น + สี)
+        # ภาพรวมทั้งภาพ (density + color)
         add_global_density_and_color(rgb_img, mask_fill)
 
-        # เตรียมตัวแปรก่อนลูป
         union_mask = np.zeros_like(mask_fill, dtype=np.uint8)
         slots_with_obj = 0
 
         for i, roi_cnt in enumerate(rois):
-            # หาศูนย์กลาง ROI จาก contour (เพื่อสร้าง ROI แบบวงกลมของ PlantCV)
+            # หา center ของ contour
             M = cv2.moments(roi_cnt)
             if M["m00"] == 0:
                 continue
             cx = int(M["m10"] / M["m00"])
             cy = int(M["m01"] / M["m00"])
 
-            # 1) สร้าง ROI (Objects dataclass) ด้วย PlantCV
+            # สร้าง ROI object (วงกลม)
             roi = pcv.roi.circle(img=rgb_img, x=cx, y=cy, r=int(eff_r))
 
-            # 2) คัดมาสก์ด้วย ROI แบบ "partial" (ทับบางส่วนก็เอาทั้งก้อน) — v4 แทนที่ roi_objects
-            #    คืนค่าเป็น binary mask ของวัตถุที่ผ่านเกณฑ์ใน ROI นั้น
-            filtered_mask = pcv.roi.filter(mask=mask_fill, roi=roi, roi_type="partial")  # v4
+            # filter ด้วย ROI (ใช้ค่าใน cfg)
+            filtered_mask = pcv.roi.filter(
+                mask=mask_fill, roi=roi,
+                roi_type=getattr(cfg, "ROI_TYPE", "partial")
+            )
             filtered_mask = ensure_binary(filtered_mask)
-
             if cv2.countNonZero(filtered_mask) == 0:
                 continue
 
-            # 3) แยกเป็นรายออบเจ็กต์ด้วยฉลาก (label) — v4 วิธีใหม่สำหรับ multi-object
-            labeled_mask, n_labels = pcv.create_labels(mask=filtered_mask, rois=None)    # v4
+            # create_labels: รองรับทั้ง tuple และ single return
             try:
                 result = pcv.create_labels(mask=filtered_mask, rois=None)
                 if isinstance(result, tuple):
                     labeled_mask, n_labels = result
                 else:
-                    labeled_mask, n_labels = result, int(labeled_mask.max())
+                    labeled_mask = result
+                    n_labels = int(labeled_mask.max())
             except Exception as e:
-                print("create_labels failed:", e)
+                _dbg("WARN: create_labels failed:", e)
                 continue
-            if n_labels <= 0:
+
+            if int(n_labels) <= 0:
                 continue
 
             r = i // cfg.COLS + 1
-            c = i % cfg.COLS + 1
+            c = i %  cfg.COLS + 1
             per_slot_count = 0
+            per_slot_area_sum = 0
 
-            # 4) วนวิเคราะห์รายต้น (label เริ่มที่ 1)
-            for j in range(1, n_labels + 1):
+            # วนวิเคราะห์รายต้น (plant)
+            for j in range(1, int(n_labels) + 1):
                 single = np.where(labeled_mask == j, 255, 0).astype(np.uint8)
                 if cv2.countNonZero(single) < getattr(cfg, "MIN_PLANT_AREA", 200):
                     continue
 
+                # ขนาดต่อ plant
+                area_px = int(cv2.countNonZero(single))
+                per_slot_area_sum += area_px
+                pcv.outputs.add_observation(
+                    sample=f"slot_{r}_{c}_obj{j}", variable="area_px",
+                    trait="area", method="countNonZero", scale="px",
+                    datatype=int, value=area_px, label="area_px"
+                )
+                mm2 = _area_mm2_from_px(area_px)
+                if mm2 is not None:
+                    pcv.outputs.add_observation(
+                        sample=f"slot_{r}_{c}_obj{j}", variable="area_mm2",
+                        trait="area", method="px_to_mm2", scale="mm2",
+                        datatype=float, value=float(mm2), label="area_mm2"
+                    )
+
+                # รวมหน้ากาก/วิเคราะห์สี‑รูปร่างราย plant
                 union_mask = cv2.bitwise_or(union_mask, single)
                 union_mask = ensure_binary(union_mask)
+                analyze_one_top(single, f"slot_{r}_{c}_obj{j}", eff_r, rgb_img)
 
-                sample_name = f"slot_{r}_{c}_obj{j}"
-                analyze_one_top(single, sample_name, eff_r, rgb_img)
                 per_slot_count += 1
                 slots_with_obj += 1
 
+            # บันทึกจำนวน/พื้นที่รวมต่อ slot
             pcv.outputs.add_observation(
-                sample=f"slot_{r}_{c}",
-                variable="n_plants_in_slot",
-                trait="count",
-                method="roi_partial_v4",
-                scale="none",
-                datatype=int,
-                value=int(per_slot_count),
-                label="count",
+                sample=f"slot_{r}_{c}", variable="n_plants_in_slot",
+                trait="count", method="roi_filter", scale="none",
+                datatype=int, value=int(per_slot_count), label="n_plants"
             )
+            pcv.outputs.add_observation(
+                sample=f"slot_{r}_{c}", variable="slot_area_sum_px",
+                trait="area", method="sum(label_area)", scale="px",
+                datatype=int, value=int(per_slot_area_sum), label="slot_area_sum_px"
+            )
+            mm2_slot = _area_mm2_from_px(per_slot_area_sum)
+            if mm2_slot is not None:
+                pcv.outputs.add_observation(
+                    sample=f"slot_{r}_{c}", variable="slot_area_sum_mm2",
+                    trait="area", method="px_to_mm2", scale="mm2",
+                    datatype=float, value=float(mm2_slot), label="slot_area_sum_mm2"
+                )
 
-        # หลังจบลูป
         if slots_with_obj == 0:
             raise RuntimeError("No objects inside any ROI cell.")
+
         extra = {
             "filename": filename,
             "view": "top",
             "roi_grid": f"{cfg.ROWS}x{cfg.COLS}",
             "roi_radius": int(eff_r),
-            "roi_type": cfg.ROI_TYPE,
+            "roi_type": getattr(cfg, "ROI_TYPE", "partial"),
             "n_slots_with_objects": int(slots_with_obj),
         }
         return extra, union_mask
 
-
-    
     else: # side
         slot_mask, (x, y, w, h) = make_side_roi(
         rgb_img, mask_fill, cfg.USE_FULL_IMAGE_ROI,
