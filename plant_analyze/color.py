@@ -40,11 +40,11 @@ def get_color_name(hue):
     elif hue < 225:
         return "Blue"
     elif hue < 255:
-        return "น้ำเงินเข้ม"
+        return "Deep Blue"
     elif hue < 285:
-        return "ม่วง"
+        return "Blue violet"
     elif hue < 315:
-        return "ชมพูม่วง"
+        return "violet"
     else:
         return 'Unknown'
     

@@ -10,17 +10,47 @@ from .roi_top import make_grid_rois
 from .roi_side import make_side_roi
 from .analyze_top import analyze_one_top, add_global_density_and_color
 from .analyze_side import analyze_one_side, _analyze_color_side
+from .calibration import get_scale_from_checkerboard
+
+_LAST_MM_PER_PX = getattr(cfg, "_LAST_MM_PER_PX", None)
 
 def run_one_image(rgb_img, filename):
+    global _LAST_MM_PER_PX
+    
+    mm_per_px, found_cb, scale_info = get_scale_from_checkerboard(
+        image=rgb_img,
+        square_size_mm=getattr(cfg, "CHECKER_SQUARE_MM", 8.0),
+        pattern_size=getattr(cfg, "CHECKER_PATTERN", (4, 4)),
+        previous_scale=_LAST_MM_PER_PX,
+        fallback_scale=getattr(cfg, "FALLBACK_MM_PER_PX", 10.0 / 51.0),
+        debug_name=f"{Path(filename).stem}_checker"
+    )
+    # อัปเดตค่าใช้งานจริง
+    setattr(cfg, "MM_PER_PX", float(mm_per_px))
+    _LAST_MM_PER_PX = float(mm_per_px)
+
+    # log ลง outputs
+    pcv.outputs.add_observation(sample='default', variable='mm_per_px',
+                                trait='scale', method=scale_info, scale='mm/px',
+                                datatype=float, value=float(mm_per_px), label='mm_per_px')
+    
     # 1) initial mask (auto ถ้าไม่กำหนด, manual ถ้าตั้ง MASK_PATH/MASK_SPEC)
     mask0, info = get_initial_mask(rgb_img)
     mask0 = ensure_binary(mask0)
-
+    
+    H, W = rgb_img.shape[:2]
+    
     # บันทึกที่มา (auto | manual_file | manual_spec)
     pcv.outputs.add_observation(sample='default', variable='mask_source',
                                 trait='text', method='mask_select', scale='none',
                                 datatype=str, value=info.get('source', 'auto'), label='mask_source')
-
+    mm_per_px = getattr(cfg, "MM_PER_PX", None)
+    if mm_per_px:
+        height_mm = float(info.get('Height_shape', H)) * mm_per_px
+        width_mm  = float(info.get('Width_shape', W)) * mm_per_px
+    else:
+        height_mm = None
+        width_mm  = None
     # เก็บข้อมูลเมตาเดิมไว้เหมือนเคย (ใช้ key เดิมเพื่อความเข้ากันได้)
     for k, v, trait, dt in [
         ('auto_channel', info.get('channel'), 'text', str),
@@ -30,6 +60,10 @@ def run_one_image(rgb_img, filename):
         ('auto_area_ratio', float(info.get('area_ratio', 0.0)), 'ratio', float),
         ('auto_n_components', int(info.get('n_components', 0)), 'count', int),
         ('auto_solidity', float(info.get('solidity', 0.0)), 'ratio', float),
+        ('auto_height_px', int(info.get('Height_shape', H)), 'length', int),
+        ('auto_width_px', int(info.get('Width_shape', W)), 'length', int),
+        ('auto_height_mm', height_mm, 'length', float),
+        ('auto_width_mm', width_mm, 'length', float),
     ]:
         pcv.outputs.add_observation(sample='default', variable=k, trait=trait,
                                     method='mask_select', scale='none',
@@ -233,6 +267,8 @@ def run_one_image(rgb_img, filename):
         raise RuntimeError("No objects inside side ROI.")
         
     analyze_one_side(slot_mask, "default", rgb_img)
+    roi_img = rgb_img[y:y+h, x:x+W].copy()
+    analyze_one_side(slot_mask, "default", roi_img)
     extra = {
         "filename": filename,
         "view": "side",

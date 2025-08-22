@@ -4,31 +4,9 @@ from .color import get_color_name, _hue_to_degrees
 import cv2
 from . import config as cfg
 import os
+from pathlib import Path
 
 # --- HEIGHT helpers ---
-def _endpoints_and_height_max_dy(skel_bin):
-    """หา endpoints ของ skeleton แล้วเลือกคู่ที่มี Δy มากที่สุด; คืน (p_top, p_bot, height_px)"""
-    K = np.array([[1,1,1],[1,10,1],[1,1,1]], dtype=np.uint8)
-    sk = (skel_bin > 0).astype(np.uint8)
-    nbr = cv2.filter2D(sk, -1, K)
-    end_mask = ((sk > 0) & (nbr == 11)).astype(np.uint8)
-    ys, xs = np.where(end_mask > 0)
-    if ys.size >= 2:
-        # เลือกคู่ที่ต่าง y มากสุด (ไม่ใช่ระยะเฉียง)
-        idx_top = int(np.argmin(ys))
-        idx_bot = int(np.argmax(ys))
-        p_top = (int(xs[idx_top]), int(ys[idx_top]))
-        p_bot = (int(xs[idx_bot]), int(ys[idx_bot]))
-        return p_top, p_bot, float(abs(p_bot[1] - p_top[1]))
-    # fallback: ใช้ช่วง y ของทั้ง skeleton
-    ys_all, xs_all = np.where(sk > 0)
-    if ys_all.size >= 2:
-        y0, y1 = int(ys_all.min()), int(ys_all.max())
-        x0 = int(xs_all[ys_all.argmin()])
-        x1 = int(xs_all[ys_all.argmax()])
-        return (x0, y0), (x1, y1), float(y1 - y0)
-    return None, None, None
-
 def _height_mask(slot_mask, stem_obj, sample_name):
     """คืน mask ที่ใช้วัดความสูง: stem-only ถ้าตั้งค่าและมีข้อมูล, ไม่งั้นใช้ mask ทั้งหมด"""
     use_stem = bool(getattr(cfg, "HEIGHT_USE_STEM_ONLY", False))
@@ -50,7 +28,6 @@ def _analyze_color_side(rgb_img, mask, bins=36):
         return None
     m = (mask > 0)
 
-    # NOTE: ถ้าภาพของคุณเป็น BGR ให้เปลี่ยนเป็น COLOR_BGR2HSV / COLOR_BGR2LAB
     hsv = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2HSV)   # H:0–179, S:0–255, V:0–255
     lab = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2LAB)   # L:0–255, A:0–255, B:0–255
 
@@ -65,7 +42,7 @@ def _analyze_color_side(rgb_img, mask, bins=36):
     if H.size == 0:
         return None
 
-    # dominant hue จากฮิสโตแกรม
+    # dominant hue from histogram
     hist, edges = np.histogram(H, bins=bins, range=(0, 360))
     peak = int(np.argmax(hist))
     hue_dom = float((edges[peak] + edges[peak + 1]) / 2.0)
@@ -102,10 +79,18 @@ def _analyze_color_side(rgb_img, mask, bins=36):
         },
         "side_greenness_index": round(greenness_index, 4),
     }
-def _px_to_mm(px_len:float):
+def _px_to_mm(px_len: float):
     if px_len is None:
         return None
-    k = float(getattr(cfg, "FAKE_MM_PER_PX", 0.5))  # เปลี่ยนเป็นค่าที่อยากลอง เช่น 0.42
+    # ถ้ามีการกำหนด MM_PER_PX ให้ใช้
+    if getattr(cfg, "MM_PER_PX", None):
+        return float(px_len) * float(cfg.MM_PER_PX)
+    # หรือถ้ามี DPI ให้คำนวณ
+    if getattr(cfg, "DPI", None):
+        px_per_mm = float(cfg.DPI) / 25.4
+        return float(px_len) / px_per_mm
+    # ถ้าไม่มีอะไรเลย ใช้ FAKE_MM_PER_PX ไว้ลอง
+    k = float(getattr(cfg, "FAKE_MM_PER_PX", 0.02))
     return float(px_len) * k
     
 def analyze_one_side(slot_mask, sample_name, rgb_img):
@@ -133,7 +118,6 @@ def analyze_one_side(slot_mask, sample_name, rgb_img):
             leaf_obj = lo[0] if isinstance(lo, tuple) else lo
             stem_obj = lo[1] if isinstance(lo, tuple) and len(lo) > 1 else None
 
-
             sid = pcv.morphology.segment_id(skel_img=pruned_skel, objects=leaf_obj, mask=slot_mask)
             segmented_img = sid[0] if isinstance(sid, tuple) else sid
             break
@@ -141,72 +125,66 @@ def analyze_one_side(slot_mask, sample_name, rgb_img):
             last_err = e
             continue
     else:
+        #pruned_skel, segmented_img, leaf_obj, stem_obj = None, None, None, None #pruned false analyze color only
         raise last_err if last_err else RuntimeError("Failed to prune skeleton.")
     
-    _ = pcv.morphology.fill_segments(mask=slot_mask, objects=leaf_obj, label=sample_name)
-    branch_pts_mask = pcv.morphology.find_branch_pts(skel_img=pruned_skel, mask=slot_mask, label=sample_name)
-    _ = pcv.morphology.segment_euclidean_length(segmented_img=segmented_img, objects=leaf_obj, label=sample_name)
-    _ = pcv.analyze.size(img=rgb_img, labeled_mask=slot_mask, label=sample_name)
-    
-    # ===== วัดความสูงแบบ Δy ของ endpoints (กันจับใบซ้าย-ขวา) =====
-    # 1) เลือก mask สำหรับวัด: stem-only (ถ้าเปิดใช้และมี) หรือทั้งก้อน
-    height_mask, height_scope = _height_mask(slot_mask, stem_obj, sample_name)
+    leaf_lengths = []
+    stem_lengths = []
 
-    # 2) ทำ skeleton เฉพาะส่วนที่จะวัด
-    skel_h = pcv.morphology.skeletonize(mask=height_mask)
+    try:
+        if segmented_img is not None and leaf_obj is not None and len(leaf_obj) > 0:
+            # จะวาดรูป debug ด้วย label = f"{sample_name}_leaf"
+            _ = pcv.morphology.segment_euclidean_length(
+                segmented_img=segmented_img, objects=leaf_obj, label=f"{sample_name}_leaf"
+            )
+    except Exception:
+        pass
 
-    # 3) หา endpoints และเลือกคู่ที่ Δy มากที่สุด (แนวดิ่ง)
-    p_top, p_bot, height_px = _endpoints_and_height_max_dy(skel_h)
+    try:
+        if segmented_img is not None and stem_obj is not None and len(stem_obj) > 0:
+            _ = pcv.morphology.segment_euclidean_length(
+                segmented_img=segmented_img, objects=stem_obj, label=f"{sample_name}_stem"
+            )
+    except Exception:
+        pass
+    # --- HEIGHT (bbox along Y) ---
+    hm, hm_src = _height_mask(slot_mask, stem_obj, sample_name)
+    ys, xs = np.where(hm > 0)
+    if ys.size > 0 and xs.size > 0:
+        y_min, y_max = int(ys.min()), int(ys.max())
+        x_min, x_max = int(xs.min()), int(xs.max())
 
-    # 4) บันทึกผล (px และ mm ถ้ามีตัวแปลง)
-    if height_px is not None and height_px > 0:
-        pcv.outputs.add_observation(sample=sample_name, variable='plant_height_px',
-                                    trait='height', method=f'endpoints_max_dy ({height_scope})',
-                                    scale='px', datatype=float, value=float(height_px),
-                                    label='plant height (px)')
+        height_px = float(y_max - y_min + 1)
+        length_px = float(x_max - x_min + 1)  # "ความยาว" ในที่นี้คือความกว้างตามแกน X
+
         height_mm = _px_to_mm(height_px)
+        length_mm = _px_to_mm(length_px)
+
+        # เก็บลง outputs → จะไป JSON
+        pcv.outputs.add_observation(sample=sample_name, variable="height_px",
+                                    trait="height", method=f"bbox_y ({hm_src})",
+                                    scale="px", datatype=float, value=height_px, label="height_px")
         if height_mm is not None:
-            pcv.outputs.add_observation(sample=sample_name, variable='plant_height_mm',
-                                        trait='height', method=f'endpoints_max_dy + scale ({height_scope})',
-                                        scale='mm', datatype=float, value=float(height_mm),
-                                        label='plant height (mm)')
+            pcv.outputs.add_observation(sample=sample_name, variable="height_mm",
+                                        trait="height", method=f"px_to_mm ({hm_src})",
+                                        scale="mm", datatype=float, value=float(height_mm), label="height_mm")
 
-        # ===== DEBUG overlay =====
-        try:
-            overlay = rgb_img.copy()
-            if p_top and p_bot:
-                # เส้นแนวดิ่งที่วัด (จริงๆ เป็นเส้นตรงระหว่างจุดบน-ล่าง)
-                cv2.line(overlay, p_top, p_bot, (0, 255, 0), 2)
-                cv2.circle(overlay, p_top, 5, (0, 0, 255), -1)  # จุดบน (แดง)
-                cv2.circle(overlay, p_bot, 5, (255, 0, 0), -1)  # จุดล่าง (ฟ้า)
-            skel_rgb = cv2.cvtColor((skel_h > 0).astype(np.uint8) * 255, cv2.COLOR_GRAY2BGR)
-            overlay = cv2.addWeighted(overlay, 1.0, skel_rgb, 0.4, 0)
-            dbg_dir = pcv.params.debug_outdir or "."
-            os.makedirs(dbg_dir, exist_ok=True)
-            out_name = os.path.join(dbg_dir, f"{sample_name}_side_height_debug.png")
-            cv2.imwrite(out_name, overlay)
-            pcv.outputs.add_observation(sample=sample_name, variable='plant_height_debug_image',
-                                        trait='debug', method=f'overlay skeleton + vertical endpoints ({height_scope})',
-                                        scale='path', datatype=str, value=out_name, label='height debug image')
-        except Exception as e:
-            print("WARN: save height debug failed:", e)
-                
-        num_leaf_segments = int(len(leaf_obj)) if leaf_obj is not None else 0
-        num_stem_segments = int(len(stem_obj)) if stem_obj is not None else 0
-        num_branch_points = int(np.count_nonzero(branch_pts_mask)) if branch_pts_mask is not None else 0
+            pcv.outputs.add_observation(sample=sample_name, variable="length_px",
+                                        trait="length", method=f"bbox_x ({hm_src})",
+                                        scale="px", datatype=float, value=length_px, label="length_px")
+        if length_mm is not None:
+            pcv.outputs.add_observation(sample=sample_name, variable="length_mm",
+                                        trait="length", method=f"px_to_mm ({hm_src})",
+                                        scale="mm", datatype=float, value=float(length_mm), label="length_mm")
 
+        # เซฟรูปดีบักให้เห็นเส้นวัด + ค่าตัวเลขบนภาพ
+        # หมายเหตุ: rgb_img ที่ส่งเข้ามาใน analyze_one_side ตอนนี้เป็น "roi_img" แล้ว (จากข้อ 1)
+        _save_size_debug(mask=slot_mask, roi_img=rgb_img,
+                         xmin=x_min, xmax=x_max, ymin=y_min, ymax=y_max,
+                         height_px=height_px, height_mm=height_mm,
+                         length_px=length_px, length_mm=length_mm,
+                         hm_src=hm_src, sample_name=sample_name)
 
-        pcv.outputs.add_observation(sample=sample_name, variable='num_leaf_segments',
-                                    trait='count', method='pcv.morphology.segment_sort',
-                                    scale='count', datatype=int, value=num_leaf_segments, label='leaf segments')
-        pcv.outputs.add_observation(sample=sample_name, variable='num_stem_segments',
-                                    trait='count', method='pcv.morphology.segment_sort',
-                                    scale='count', datatype=int, value=num_stem_segments, label='stem segments')
-        pcv.outputs.add_observation(sample=sample_name, variable='num_branch_points',
-                                    trait='count', method='pcv.morphology.find_branch_pts',
-                                    scale='count', datatype=int, value=num_branch_points, label='branch points')
-        
-        _ = pcv.analyze.size(img=rgb_img, labeled_mask=slot_mask, label=sample_name)
 
     # === เพิ่มบล็อกสี ===
     color_feats = _analyze_color_side(rgb_img=rgb_img, mask=slot_mask, bins=36)
@@ -240,3 +218,50 @@ def analyze_one_side(slot_mask, sample_name, rgb_img):
                                     trait='greenness (-a*)', method='LAB a* proxy (side view)',
                                     scale='unit', datatype=float, value=color_feats["side_greenness_index"],
                                     label='greenness index')
+
+def _save_size_debug(mask, roi_img, xmin, xmax, ymin, ymax,
+                     height_px, height_mm, length_px, length_mm,
+                     hm_src, sample_name):
+    """เซฟรูปดีบักแสดงเส้นวัด H/W บน ROI (ถ้ามี) หรือบนหน้ากาก"""
+    import cv2
+    import numpy as np
+    from . import config as cfg
+    # เตรียมภาพแสดงผล
+    if roi_img is None:
+        vis = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+    else:
+        vis = roi_img.copy()
+        # overlay โซนวัตถุจาง ๆ ให้เห็นขอบเขต
+        overlay = vis.copy()
+        overlay[mask > 0] = (0, 255, 0)
+        vis = cv2.addWeighted(vis, 0.85, overlay, 0.15, 0)
+
+    H, W = mask.shape[:2]
+    cx = int((xmin + xmax) / 2)
+    cy = int((ymin + ymax) / 2)
+
+    # วาด "ความสูง" (แดง)
+    cv2.line(vis, (cx, ymin), (cx, ymax), (0, 0, 255), 2)
+    cv2.circle(vis, (cx, ymin), 4, (0, 0, 255), -1)
+    cv2.circle(vis, (cx, ymax), 4, (0, 0, 255), -1)
+
+    # วาด "ความยาว/กว้าง" (น้ำเงิน)
+    cv2.line(vis, (xmin, cy), (xmax, cy), (255, 0, 0), 2)ชชชช
+    cv2.circle(vis, (xmin, r,t
+    cv2.circle(vis, (xmax, cy), 4, (255, 0, 0), -1)
+
+    # ข้อความบนภาพ
+    txt1 = f"H: {height_px:.1f}px" + (f" ({height_mm:.2f}mm)" if height_mm is not None else "")
+    txt2 = f"W: {length_px:.1f}px" + (f" ({length_mm:.2f}mm)" if length_mm is not None else "")
+    txt3 = f"source: {hm_src}"
+    ytxt = max(20, ymin - 10)
+    cv2.putText(vis, txt1, (10, ytxt), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
+    cv2.putText(vis, txt2, (10, ytxt + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2, cv2.LINE_AA)
+    cv2.putText(vis, txt3, (10, ytxt + 44), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 160, 0), 2, cv2.LINE_AA)
+
+    # ที่จะเซฟไฟล์
+    base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
+    Path(base, "processed").mkdir(parents=True, exist_ok=True)
+    out_path = Path(base, "processed", f"{sample_name}_size_debug.png")
+    cv2.imwrite(str(out_path), vis)
+        

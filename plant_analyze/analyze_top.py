@@ -28,7 +28,7 @@ def add_global_density_and_color(rgb_img, mask_fill):
     else:
         big_solidity = 0.0
         
-    hsv = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2HSV)
+    hsv = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2HSV)
     h, s, v = [ch[mask_fill > 0] for ch in cv2.split(hsv)]
     h_mean, h_std, h_med = _safe_starts(h.astype(np.float32) * 2.0)
     s_mean, s_std, s_med = _safe_starts(s.astype(np.float32))

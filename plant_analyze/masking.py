@@ -7,6 +7,13 @@ from . import config as cfg
 
 
 # ---------- Core helpers ----------
+def _per_mm_from_shape(H, W):
+    """คืนขนาดภาพเป็น mm ถ้ามี MM_PER_PX กำหนด"""
+    mm_per_px = getattr(cfg, "MM_PER_PX", None)
+    if mm_per_px:
+        return float(H) * float(mm_per_px), float(W) * float(mm_per_px)
+    return None, None
+
 def ensure_binary(mask, normalize_orientation: bool = True):
     """
     ทำให้มาสก์เป็นภาพช่องเทาไบนารี 0/255
@@ -36,6 +43,7 @@ def ensure_binary(mask, normalize_orientation: bool = True):
         H, W = mm.shape[:2]
         area_total = max(H * W, 1)
         ratio = float(cv2.countNonZero(mm)) / area_total
+        
 
         # นับคอนทัวร์ + วัด solidity ของก้อนใหญ่สุด
         _fc = cv2.findContours(mm.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -112,6 +120,8 @@ def auto_select_mask(rgb_img):
     """
     H, W = rgb_img.shape[:2]
     area_total = H * W
+    height_shape = H
+    width_shape = W
 
     # 1) เตรียมช่องสี (LAB/HSV) + rescale ปลอดภัย
     chans = []
@@ -139,14 +149,21 @@ def auto_select_mask(rgb_img):
         # ไม่มีช่องสีให้ลองเลย → fallback (ยังคง normalize orientation)
         fb = pcv.threshold.otsu(gray_img=pcv.rgb2gray_lab(rgb_img=rgb_img, channel='a'), object_type='dark')
         fb = ensure_binary(fb, normalize_orientation=True)
+        h_mm, w_mm = _per_mm_from_shape(height_shape, width_shape)
         return fb, {
             "channel": "lab_a",
             "method": "otsu",
             "object_type": "dark",
             "ksize": None,
             "area_ratio": float(np.count_nonzero(fb)) / max(area_total, 1),
+            "Height_shape" :height_shape,
+            "Width_shape": width_shape,
             "n_components": 0,
             "solidity": 0.0,
+            "Height_shape": height_shape,
+            "Width_shape": width_shape,
+            "Height_mm": h_mm,
+            "Width_mm": w_mm,
         }
 
     # 2) เตรียมชุด threshold ที่จะลอง
@@ -158,7 +175,7 @@ def auto_select_mask(rgb_img):
             (name, ("triangle", None,  None, "dark")),
             (name, ("triangle", None,  None, "light")),
         ]
-        for ksz in (31, 51, 101, 75, 120):
+        for ksz in (31, 51, 101, 75, 121):
             methods += [
                 (name, ("gaussian", ksz, 0, "dark")),
                 (name, ("gaussian", ksz, 0, "light")),
@@ -212,6 +229,8 @@ def auto_select_mask(rgb_img):
             "object_type": "dark",
             "ksize": None,
             "area_ratio": float(np.count_nonzero(fb)) / max(area_total, 1),
+            "Height_shape" :height_shape,
+            "Width_shape": width_shape,
             "n_components": 0,
             "solidity": 0.0,
         }
@@ -225,12 +244,14 @@ def auto_select_mask(rgb_img):
         "object_type": obj_type,
         "ksize": ksz,
         "area_ratio": float(ratio),
+        "Height_shape" :height_shape,
+        "Width_shape": width_shape,
         "n_components": int(n_comp),
         "solidity": float(solidity),
     }
 def _gray_from_channel(rgb_img, ch: str):
     ch = (ch or "").lower()
-    if ch in ("lab_a", "lab-b", "laba"):
+    if ch in ("lab_a", "lab-a", "laba"):
         return pcv.rgb2gray_lab(rgb_img=rgb_img, channel='a')
     if ch in ("lab_b", "lab-b", "labb"):
         return pcv.rgb2gray_lab(rgb_img=rgb_img, channel='b')
@@ -280,7 +301,9 @@ def _mask_from_spec(rgb_img, spec: dict):
         if not ksize:
             raise ValueError("MASK_SPEC requires 'ksize' for gaussian.")
         m = pcv.threshold.gaussian(gray_img=gray, ksize=int(ksize), offset=int(offset), object_type=obj)
-
+    H, W = rgb_img.shape[:2]      
+    height_shape = H
+    width_shape = W
     m, area_ratio, n_comp, solidity = _summarize_mask(m)
     info = {
         "source": "manual_spec",
@@ -289,6 +312,8 @@ def _mask_from_spec(rgb_img, spec: dict):
         "object_type": str(obj),
         "ksize": int(ksize) if ksize is not None else None,
         "area_ratio": float(area_ratio),
+        "Height_shape" :height_shape,
+        "Width_shape": width_shape,
         "n_components": int(n_comp),
         "solidity": float(solidity),
     }
@@ -299,6 +324,9 @@ def _mask_from_file(path_str: str):
     if not p.exists():
         raise FileNotFoundError(f"MASK_PATH not found: {p}")
     raw = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)
+    H, W = raw.shape[:2]       
+    height_shape = H
+    width_shape = W
     m, area_ratio, n_comp, solidity = _summarize_mask(raw)
     info = {
         "source": "manual_file",
@@ -307,6 +335,8 @@ def _mask_from_file(path_str: str):
         "object_type": "n/a",
         "ksize": None,
         "area_ratio": float(area_ratio),
+        "Height_shape" :height_shape,
+        "Width_shape": width_shape,
         "n_components": int(n_comp),
         "solidity": float(solidity),
         "mask_path": str(p),
