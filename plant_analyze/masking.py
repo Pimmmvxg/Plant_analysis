@@ -59,8 +59,48 @@ def ensure_binary(mask, normalize_orientation: bool = True):
         else:
             solidity = 0.0
 
-        # ให้คะแนน: ใกล้ 0.30 ดี, ชิ้นส่วนน้อยดี, solidity สูงดี
-        return (1.0 - abs(0.30 - ratio)) - 0.1 * max(0, n_comp - 1) + 0.5 * solidity
+         # ---------- VIEW-aware component preference ----------
+        view = str(getattr(cfg, "VIEW", "top")).lower()
+        if view == "top":
+            exp_min = int(getattr(cfg, "TOP_EXPECT_N_MIN", 5))
+            exp_max = int(getattr(cfg, "TOP_EXPECT_N_MAX", 6))
+        else:  # side
+            exp_min = int(getattr(cfg, "SIDE_EXPECT_N_MIN", 1))
+            exp_max = int(getattr(cfg, "SIDE_EXPECT_N_MAX", 1))
+
+        # ให้รางวัลเมื่อจำนวนก้อนอยู่ในช่วงที่คาดหวัง, ลงโทษเมื่อห่างออกไป
+        if n_comp == 0:
+            comp_score = -1.0
+        elif n_comp < exp_min:
+            comp_score = -0.2 * float(exp_min - n_comp)
+        elif n_comp > exp_max:
+            comp_score = -0.2 * float(n_comp - exp_max)
+        else:
+            comp_score = +0.3  # อยู่ในช่วงพอดี
+
+        # เกณฑ์รวม: coverage ใกล้ 0.30 ดี + คะแนนตามจำนวนก้อน + solidity สูงดี
+        coverage_score = (1.0 - abs(0.30 - ratio))
+        
+        top_touch    = np.count_nonzero(mm[0, :] > 0)
+        bottom_touch = np.count_nonzero(mm[-1, :] > 0)
+        left_touch   = np.count_nonzero(mm[:, 0] > 0)
+        right_touch  = np.count_nonzero(mm[:, -1] > 0)
+
+        # คิดเป็นสัดส่วนต่อความยาวขอบ
+        top_p    = top_touch    / max(W, 1)
+        bottom_p = bottom_touch / max(W, 1)
+        left_p   = left_touch   / max(H, 1)
+        right_p  = right_touch  / max(H, 1)
+
+        # แตะทั้งหมดกี่ด้าน
+        n_edges = sum(p > 0.5 for p in (top_p, bottom_p, left_p, right_p))
+        # แตะหนักแค่ไหนรวมกัน (0..4)
+        edge_strength = top_p + bottom_p + left_p + right_p
+
+        # หักคะแนนตามจำนวนด้านที่แตะ + ความยาวที่แตะ
+        border_penalty = 0.4 * n_edges + 0.6 * edge_strength
+       
+        return coverage_score + comp_score + 0.5 * solidity
 
     return m if _score(m) >= _score(m_inv) else m_inv
 

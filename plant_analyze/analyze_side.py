@@ -1,267 +1,256 @@
-import numpy as np
-from plantcv import plantcv as pcv
-from .color import get_color_name, _hue_to_degrees
-import cv2
-from . import config as cfg
-import os
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import Tuple, Optional
 from pathlib import Path
 
-# --- HEIGHT helpers ---
-def _height_mask(slot_mask, stem_obj, sample_name):
-    """คืน mask ที่ใช้วัดความสูง: stem-only ถ้าตั้งค่าและมีข้อมูล, ไม่งั้นใช้ mask ทั้งหมด"""
-    use_stem = bool(getattr(cfg, "HEIGHT_USE_STEM_ONLY", False))
-    if use_stem and stem_obj is not None and len(stem_obj) > 0:
-        try:
-            m = pcv.morphology.fill_segments(mask=slot_mask, objects=stem_obj,
-                                             label=f"{sample_name}_stem")
-            if m is not None:
-                m = (m > 0).astype(np.uint8) * 255
-                if cv2.countNonZero(m) > 0:
-                    return m, "stem_only"
-        except Exception:
-            pass
-    return slot_mask, "full_mask"
+import cv2
+import numpy as np
+from plantcv import plantcv as pcv
 
-def _analyze_color_side(rgb_img, mask, bins=36):
-    """คำนวณสีหลักและสถิติสีจาก RGB + mask (วัตถุ=255)"""
-    if rgb_img is None or mask is None:
-        return None
-    m = (mask > 0)
+from . import config as cfg
+from .masking import ensure_binary
 
-    hsv = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2HSV)   # H:0–179, S:0–255, V:0–255
-    lab = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2LAB)   # L:0–255, A:0–255, B:0–255
 
-    H = hsv[..., 0][m].astype(np.float32) * 2.0        # 0–179 -> 0–358 deg
-    S = hsv[..., 1][m].astype(np.float32) / 255.0
-    V = hsv[..., 2][m].astype(np.float32) / 255.0
+# ---------------------------- Data class (optional) ---------------------------- #
+@dataclass
+class SideBBox:
+    x_min: int
+    y_min: int
+    x_max: int
+    y_max: int
 
-    Lc = lab[..., 0][m].astype(np.float32) / 255.0
-    Ac = lab[..., 1][m].astype(np.float32) - 128.0
-    Bc = lab[..., 2][m].astype(np.float32) - 128.0
+    @property
+    def width(self) -> int:
+        return max(0, self.x_max - self.x_min + 1)
 
-    if H.size == 0:
-        return None
+    @property
+    def height(self) -> int:
+        return max(0, self.y_max - self.y_min + 1)
 
-    # dominant hue from histogram
-    hist, edges = np.histogram(H, bins=bins, range=(0, 360))
-    peak = int(np.argmax(hist))
-    hue_dom = float((edges[peak] + edges[peak + 1]) / 2.0)
-    hue_dom = _hue_to_degrees(hue_dom)  # normalize/warp เผื่อ input เพี้ยน
-    main_color = get_color_name(hue_dom)
 
-    # circular mean hue
-    rad = np.deg2rad(H)
-    mean_angle = np.arctan2(np.mean(np.sin(rad)), np.mean(np.cos(rad)))
-    mean_hue = float((np.rad2deg(mean_angle) + 360.0) % 360.0)
+# ---------------------------- Helpers ---------------------------- #
+def _bbox_from_mask(m: np.ndarray) -> SideBBox:
+    ys, xs = np.where(m > 0)
+    if ys.size == 0 or xs.size == 0:
+        return SideBBox(0, 0, 0, 0)
+    return SideBBox(int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
 
-    # ค่าเฉลี่ย
-    s_mean = float(np.mean(S))
-    v_mean = float(np.mean(V))
-    l_mean = float(np.mean(Lc))
-    a_mean = float(np.mean(Ac))
-    b_mean = float(np.mean(Bc))
 
-    greenness_index = float(-a_mean)  # A บวก=แดง, ลบ=เขียว → -A ยิ่งสูงยิ่งเขียว
+def _skeletonize(mask: np.ndarray) -> np.ndarray:
+    return pcv.morphology.skeletonize(mask=mask)
 
-    return {
-        "side_main_color": main_color,
-        "side_main_hue_deg": round(hue_dom, 1),
-        "side_mean_hue_deg": round(mean_hue, 1),
-        "side_hsv_mean": {
-            "hue_deg": round(mean_hue, 1),
-            "sat": round(s_mean, 4),
-            "val": round(v_mean, 4),
-        },
-        "side_lab_mean": {
-            "L": round(l_mean, 4),
-            "a": round(a_mean, 4),
-            "b": round(b_mean, 4),
-        },
-        "side_greenness_index": round(greenness_index, 4),
-    }
-def _px_to_mm(px_len: float):
-    if px_len is None:
-        return None
-    # ถ้ามีการกำหนด MM_PER_PX ให้ใช้
-    if getattr(cfg, "MM_PER_PX", None):
-        return float(px_len) * float(cfg.MM_PER_PX)
-    # หรือถ้ามี DPI ให้คำนวณ
-    if getattr(cfg, "DPI", None):
-        px_per_mm = float(cfg.DPI) / 25.4
-        return float(px_len) / px_per_mm
-    # ถ้าไม่มีอะไรเลย ใช้ FAKE_MM_PER_PX ไว้ลอง
-    k = float(getattr(cfg, "FAKE_MM_PER_PX", 0.02))
-    return float(px_len) * k
-    
-def analyze_one_side(slot_mask, sample_name, rgb_img):
-    # 1) skeletonize
-    base_skel = pcv.morphology.skeletonize(mask=slot_mask)
 
-    # 2) prune sizes
-    sizes = [10, 25, 50, 75, 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500]
-    last_err = None
-    pruned_skel, edge_objects = None, None
-    
+def _prune_robust(skel: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Iteratively prune; tolerate different PlantCV return signatures."""
+    sizes = [10, 25, 50, 75, 100, 125, 150, 175, 200]
+    pruned = skel.copy()
     for sz in sizes:
         try:
-            ret = pcv.morphology.prune(skel_img=base_skel if pruned_skel is None else pruned_skel,
-                                       size=sz, mask=slot_mask)
-            if isinstance(ret, tuple) and len(ret) == 3:
-                pruned_skel, seg_img, edge_objects = ret
-            elif isinstance(ret, tuple) and len(ret) == 2:
-                pruned_skel, edge_objects = ret
+            ret = pcv.morphology.prune(skel_img=pruned, size=int(sz), mask=mask)
+            if isinstance(ret, tuple):
+                # (skel, seg_img, edge_objects) or (skel, edge_objects)
+                pruned = ret[0]
             else:
-                pruned_skel = ret
-                edge_objects = None
-                
-            lo = pcv.morphology.segment_sort(skel_img=pruned_skel, objects=edge_objects, mask=slot_mask)
-            leaf_obj = lo[0] if isinstance(lo, tuple) else lo
-            stem_obj = lo[1] if isinstance(lo, tuple) and len(lo) > 1 else None
+                pruned = ret
+        except Exception:
+            pass
+    return pruned
 
-            sid = pcv.morphology.segment_id(skel_img=pruned_skel, objects=leaf_obj, mask=slot_mask)
-            segmented_img = sid[0] if isinstance(sid, tuple) else sid
-            break
-        except Exception as e:
-            last_err = e
-            continue
-    else:
-        #pruned_skel, segmented_img, leaf_obj, stem_obj = None, None, None, None #pruned false analyze color only
-        raise last_err if last_err else RuntimeError("Failed to prune skeleton.")
+
+def _find_endpoints(skel: np.ndarray) -> np.ndarray:
+    """Return Nx2 array of (y,x) coords for pixels with degree==1."""
+    k = np.array([[1,1,1],[1,10,1],[1,1,1]], dtype=np.uint8)
+    nb = cv2.filter2D((skel > 0).astype(np.uint8), -1, k)
+    ys, xs = np.where(nb == 11)
+    if ys.size == 0:
+        return np.zeros((0, 2), dtype=int)
+    return np.stack([ys, xs], axis=1)
+
+
+def _px_to_mm(px: float) -> Optional[float]:
+    """Convert pixel length to millimeters using cfg.MM_PER_PX (mm per pixel).
+    If not available, return None (caller can skip writing mm values).
+    """
+    mm_per_px = getattr(cfg, "MM_PER_PX", None)
+    if mm_per_px is None:
+        return None
+    try:
+        mm_per_px = float(mm_per_px)
+    except Exception:
+        return None
+    return float(px) * mm_per_px
+
+
+# ---------------------------- Core API ---------------------------- #
+# ---------------------------- Core API + Debug helpers ---------------------------- #
+
+def _save_debug(img: np.ndarray, name: str) -> None:
+    try:
+        base = Path(pcv.params.debug_outdir or ".")
+        base.mkdir(parents=True, exist_ok=True)
+        pcv.print_image(img=img, filename=str(base / name))
+    except Exception:
+        pass
+
+def _draw_size_overlay(mask: np.ndarray, rgb: np.ndarray, bbox: SideBBox,
+                       height_px: float, length_px: float,
+                       height_mm: Optional[float], length_mm: Optional[float]) -> np.ndarray:
+    vis = rgb.copy()
+    # mask outline
+    cnts, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(vis, cnts, -1, (0, 255, 255), 2)
+
+    # bbox + dimensions text
+    cv2.rectangle(vis, (bbox.x_min, bbox.y_min), (bbox.x_max, bbox.y_max), (0, 255, 0), 2)
+    x_mid = int(0.5*(bbox.x_min + bbox.x_max))
+    cv2.line(vis, (x_mid, bbox.y_min), (x_mid, bbox.y_max), (0, 255, 0), 2)
+
+    # Annotations
+    txt1 = f"H: {height_px:.1f}px" + (f" ({height_mm:.1f} mm)" if height_mm is not None else "")
+    txt2 = f"L: {length_px:.1f}px" + (f" ({length_mm:.1f} mm)" if length_mm is not None else "")
+    cv2.putText(vis, txt1, (bbox.x_min, max(0, bbox.y_min-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (50,220,50), 2, cv2.LINE_AA)
+    cv2.putText(vis, txt2, (bbox.x_min, min(vis.shape[0]-5, bbox.y_max+20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (50,220,50), 2, cv2.LINE_AA)
+    return vis
+def _draw_shape_overlay(rgb: np.ndarray,
+                        shape_height_px: float, shape_length_px: float,
+                        shape_height_mm: Optional[float], shape_length_mm: Optional[float]) -> np.ndarray:
+    """Overlay showing image-shape-based size (H,W) regardless of mask.
+    Draws a border around the full image and annotates H/W in px (+mm if available).
+    """
+    vis = rgb.copy()
+    H, W = vis.shape[:2]
+    # full-frame border
+    cv2.rectangle(vis, (1,1), (W-2, H-2), (255, 0, 200), 2)
+    # dimension arrows
+    # vertical
+    cv2.arrowedLine(vis, (W-10, 5), (W-10, H-5), (255, 0, 200), 2, tipLength=0.02)
+    # horizontal
+    cv2.arrowedLine(vis, (5, H-10), (W-5, H-10), (255, 0, 200), 2, tipLength=0.02)
+    # labels
+    txtH = f"H_shape: {shape_height_px:.1f}px" + (f" ({shape_height_mm:.1f} mm)" if shape_height_mm is not None else "")
+    txtW = f"W_shape: {shape_length_px:.1f}px" + (f" ({shape_length_mm:.1f} mm)" if shape_length_mm is not None else "")
+    cv2.putText(vis, txtH, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,0,200), 2, cv2.LINE_AA)
+    cv2.putText(vis, txtW, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,0,200), 2, cv2.LINE_AA)
+    return vis
+
+def analyze_one_side(slot_mask: np.ndarray, sample_name: str, rgb_img: np.ndarray) -> None:
+
+    # Normalize mask to binary 0/255 with object=white
+    slot_mask = ensure_binary(slot_mask, normalize_orientation=True)
+    if slot_mask is None or cv2.countNonZero(slot_mask) == 0:
+        raise ValueError("analyze_one_side: empty mask")
+
+    H, W = slot_mask.shape[:2]
+
+    # Save basic mask debug
+    mask_vis = cv2.cvtColor(slot_mask, cv2.COLOR_GRAY2BGR)
+    _save_debug(mask_vis, f"{sample_name}_side_mask.png")
+
+    # Skeletonize & prune
+    skel = _skeletonize(slot_mask)
+    pruned = _prune_robust(skel, slot_mask)
+
+    # Save skeleton debug (raw + pruned)
+    skel_vis = rgb_img.copy()
+    yy, xx = np.where(skel > 0)
+    skel_vis[yy, xx] = (0, 255, 255)
+    _save_debug(skel_vis, f"{sample_name}_side_skeleton.png")
+
+    pruned_vis = rgb_img.copy()
+    yy, xx = np.where(pruned > 0)
+    pruned_vis[yy, xx] = (255, 255, 0)
+    _save_debug(pruned_vis, f"{sample_name}_side_skeleton_pruned.png")
+
+    # Endpoints
+    endpoints = _find_endpoints(pruned)
+    n_endpoints = int(endpoints.shape[0])
+
+    endpoints_vis = pruned_vis.copy()
+    for (ey, ex) in endpoints:
+        cv2.circle(endpoints_vis, (int(ex), int(ey)), 3, (0, 0, 255), -1)
+    _save_debug(endpoints_vis, f"{sample_name}_side_endpoints.png")
+
+    # Size from mask bbox
+    bbox = _bbox_from_mask(slot_mask)
+    height_px = float(bbox.height)
+    length_px = float(bbox.width)
+
+    # mm conversion via cfg.MM_PER_PX (mm/px)
+    height_mm = _px_to_mm(height_px)
+    length_mm = _px_to_mm(length_px)
+
+    # Area in px
+    area_px = int(cv2.countNonZero(slot_mask))
+
+    # Extra: Shape-based size (image dimensions)
+    shape_H, shape_W = slot_mask.shape[:2]
+    shape_height_px = float(shape_H)
+    shape_length_px = float(shape_W)
+    shape_height_mm = _px_to_mm(shape_height_px)
+    shape_length_mm = _px_to_mm(shape_length_px)
     
-    leaf_lengths = []
-    stem_lengths = []
+    # OVERLAY: size/shape summary (like analyze.size style)
+    size_overlay = _draw_size_overlay(slot_mask, rgb_img, bbox, height_px, length_px, height_mm, length_mm)
+    _save_debug(size_overlay, f"{sample_name}_side_size_overlay.png")
+    # (A) OVERLAY: custom size/shape summary (like analyze.size style)
+    shape_overlay = _draw_shape_overlay(rgb_img, shape_height_px, shape_length_px, shape_height_mm, shape_length_mm)
+    _save_debug(shape_overlay, f"{sample_name}_side_shape_overlay.png")
 
+    # (B) PlantCV built-in: pcv.analyze.size (will also emit its own debug image)
     try:
-        if segmented_img is not None and leaf_obj is not None and len(leaf_obj) > 0:
-            # จะวาดรูป debug ด้วย label = f"{sample_name}_leaf"
-            _ = pcv.morphology.segment_euclidean_length(
-                segmented_img=segmented_img, objects=leaf_obj, label=f"{sample_name}_leaf"
-            )
+        # รองรับความต่างของ signature ในบางเวอร์ชัน
+        try:
+            labeled_mask, n_labels = pcv.create_labels(bin_img=slot_mask)
+        except TypeError:
+            labeled_mask, n_labels = pcv.create_labels(slot_mask)
+
+        pcv.analyze.size(
+            img=rgb_img,                 # หรือใช้ cropped_img ถ้าคุณมี ROI แล้วครอปไว้
+            labeled_mask=labeled_mask,
+            label=sample_name
+        )
+    except Exception:
+        # อย่าล้ม pipeline แม้ analyze.size จะ fail
+        pass
+
+    # ---------------- Record observations ---------------- #
+    def _add(var, value, trait, method, scale, dt, label=None):
+        pcv.outputs.add_observation(sample=sample_name, variable=var, trait=trait,
+                                    method=method, scale=scale, datatype=dt,
+                                    value=value, label=label or var)
+
+    _add("height_px", height_px, "height", "bbox_y_span", "px", float)
+    _add("length_px", length_px, "length", "bbox_x_span", "px", float)
+    _add("area_px", area_px, "projected_area", "mask_nonzero", "px^2", int)
+    _add("n_endpoints", n_endpoints, "skeleton_endpoints", "degree==1", "count", int)
+    _add("bbox", f"({bbox.x_min},{bbox.y_min},{bbox.x_max},{bbox.y_max})", "bbox_xyxy", "mask_bbox", "px", str)
+
+    if height_mm is not None:
+        _add("height_mm", float(height_mm), "height", "px_to_mm", "mm", float)
+    if length_mm is not None:
+        _add("length_mm", float(length_mm), "length", "px_to_mm", "mm", float)
+    
+    # Record shape size too
+    _add("shape_height_px", shape_height_px, "shape_height", "image_shape", "px", float)
+    _add("shape_length_px", shape_length_px, "shape_length", "image_shape", "px", float)
+    if shape_height_mm is not None:
+        _add("shape_height_mm", shape_height_mm, "shape_height", "image_shape", "mm", float)
+    if shape_length_mm is not None:
+        _add("shape_length_mm", shape_length_mm, "shape_length", "image_shape", "mm", float)
+
+    # Extra: save a consolidated debug with tiles
+    try:
+        gap = 8
+        h2 = max(img.shape[0] for img in [rgb_img, size_overlay, endpoints_vis])
+        w1 = rgb_img.shape[1]
+        w2 = size_overlay.shape[1]
+        w3 = endpoints_vis.shape[1]
+        canvas = np.zeros((h2, w1 + w2 + w3 + gap*2, 3), dtype=np.uint8)
+        canvas[:rgb_img.shape[0], :w1] = rgb_img
+        canvas[:size_overlay.shape[0], w1+gap:w1+gap+w2] = size_overlay
+        canvas[:endpoints_vis.shape[0], w1+gap+w2+gap:w1+gap+w2+gap+w3] = endpoints_vis
+        _save_debug(canvas, f"{sample_name}_side_summary.png")
     except Exception:
         pass
 
-    try:
-        if segmented_img is not None and stem_obj is not None and len(stem_obj) > 0:
-            _ = pcv.morphology.segment_euclidean_length(
-                segmented_img=segmented_img, objects=stem_obj, label=f"{sample_name}_stem"
-            )
-    except Exception:
-        pass
-    # --- HEIGHT (bbox along Y) ---
-    hm, hm_src = _height_mask(slot_mask, stem_obj, sample_name)
-    ys, xs = np.where(hm > 0)
-    if ys.size > 0 and xs.size > 0:
-        y_min, y_max = int(ys.min()), int(ys.max())
-        x_min, x_max = int(xs.min()), int(xs.max())
-
-        height_px = float(y_max - y_min + 1)
-        length_px = float(x_max - x_min + 1)  # "ความยาว" ในที่นี้คือความกว้างตามแกน X
-
-        height_mm = _px_to_mm(height_px)
-        length_mm = _px_to_mm(length_px)
-
-        # เก็บลง outputs → จะไป JSON
-        pcv.outputs.add_observation(sample=sample_name, variable="height_px",
-                                    trait="height", method=f"bbox_y ({hm_src})",
-                                    scale="px", datatype=float, value=height_px, label="height_px")
-        if height_mm is not None:
-            pcv.outputs.add_observation(sample=sample_name, variable="height_mm",
-                                        trait="height", method=f"px_to_mm ({hm_src})",
-                                        scale="mm", datatype=float, value=float(height_mm), label="height_mm")
-
-            pcv.outputs.add_observation(sample=sample_name, variable="length_px",
-                                        trait="length", method=f"bbox_x ({hm_src})",
-                                        scale="px", datatype=float, value=length_px, label="length_px")
-        if length_mm is not None:
-            pcv.outputs.add_observation(sample=sample_name, variable="length_mm",
-                                        trait="length", method=f"px_to_mm ({hm_src})",
-                                        scale="mm", datatype=float, value=float(length_mm), label="length_mm")
-
-        # เซฟรูปดีบักให้เห็นเส้นวัด + ค่าตัวเลขบนภาพ
-        # หมายเหตุ: rgb_img ที่ส่งเข้ามาใน analyze_one_side ตอนนี้เป็น "roi_img" แล้ว (จากข้อ 1)
-        _save_size_debug(mask=slot_mask, roi_img=rgb_img,
-                         xmin=x_min, xmax=x_max, ymin=y_min, ymax=y_max,
-                         height_px=height_px, height_mm=height_mm,
-                         length_px=length_px, length_mm=length_mm,
-                         hm_src=hm_src, sample_name=sample_name)
-
-
-    # === เพิ่มบล็อกสี ===
-    color_feats = _analyze_color_side(rgb_img=rgb_img, mask=slot_mask, bins=36)
-    if color_feats is not None:
-        pcv.outputs.add_observation(sample=sample_name, variable='side_main_color',
-                                    trait='main color', method='HSV histogram (side view)',
-                                    scale='categorical', datatype=str, value=color_feats["side_main_color"],
-                                    label='side main color')
-
-        pcv.outputs.add_observation(sample=sample_name, variable='side_main_hue_deg',
-                                    trait='dominant hue', method='HSV histogram (side view)',
-                                    scale='degree', datatype=float, value=color_feats["side_main_hue_deg"],
-                                    label='dominant hue (deg)')
-
-        pcv.outputs.add_observation(sample=sample_name, variable='side_mean_hue_deg',
-                                    trait='circular mean hue', method='circular mean (side view)',
-                                    scale='degree', datatype=float, value=color_feats["side_mean_hue_deg"],
-                                    label='mean hue (deg)')
-
-        pcv.outputs.add_observation(sample=sample_name, variable='side_hsv_mean',
-                                    trait='HSV mean', method='masked mean (side view)',
-                                    scale='unit', datatype=dict, value=color_feats["side_hsv_mean"],
-                                    label='mean HSV')
-
-        pcv.outputs.add_observation(sample=sample_name, variable='side_lab_mean',
-                                    trait='LAB mean', method='masked mean (side view)',
-                                    scale='unit', datatype=dict, value=color_feats["side_lab_mean"],
-                                    label='mean LAB')
-
-        pcv.outputs.add_observation(sample=sample_name, variable='side_greenness_index',
-                                    trait='greenness (-a*)', method='LAB a* proxy (side view)',
-                                    scale='unit', datatype=float, value=color_feats["side_greenness_index"],
-                                    label='greenness index')
-
-def _save_size_debug(mask, roi_img, xmin, xmax, ymin, ymax,
-                     height_px, height_mm, length_px, length_mm,
-                     hm_src, sample_name):
-    """เซฟรูปดีบักแสดงเส้นวัด H/W บน ROI (ถ้ามี) หรือบนหน้ากาก"""
-    import cv2
-    import numpy as np
-    from . import config as cfg
-    # เตรียมภาพแสดงผล
-    if roi_img is None:
-        vis = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-    else:
-        vis = roi_img.copy()
-        # overlay โซนวัตถุจาง ๆ ให้เห็นขอบเขต
-        overlay = vis.copy()
-        overlay[mask > 0] = (0, 255, 0)
-        vis = cv2.addWeighted(vis, 0.85, overlay, 0.15, 0)
-
-    H, W = mask.shape[:2]
-    cx = int((xmin + xmax) / 2)
-    cy = int((ymin + ymax) / 2)
-
-    # วาด "ความสูง" (แดง)
-    cv2.line(vis, (cx, ymin), (cx, ymax), (0, 0, 255), 2)
-    cv2.circle(vis, (cx, ymin), 4, (0, 0, 255), -1)
-    cv2.circle(vis, (cx, ymax), 4, (0, 0, 255), -1)
-
-    # วาด "ความยาว/กว้าง" (น้ำเงิน)
-    cv2.line(vis, (xmin, cy), (xmax, cy), (255, 0, 0), 2)ชชชช
-    cv2.circle(vis, (xmin, r,t
-    cv2.circle(vis, (xmax, cy), 4, (255, 0, 0), -1)
-
-    # ข้อความบนภาพ
-    txt1 = f"H: {height_px:.1f}px" + (f" ({height_mm:.2f}mm)" if height_mm is not None else "")
-    txt2 = f"W: {length_px:.1f}px" + (f" ({length_mm:.2f}mm)" if length_mm is not None else "")
-    txt3 = f"source: {hm_src}"
-    ytxt = max(20, ymin - 10)
-    cv2.putText(vis, txt1, (10, ytxt), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
-    cv2.putText(vis, txt2, (10, ytxt + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2, cv2.LINE_AA)
-    cv2.putText(vis, txt3, (10, ytxt + 44), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 160, 0), 2, cv2.LINE_AA)
-
-    # ที่จะเซฟไฟล์
-    base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
-    Path(base, "processed").mkdir(parents=True, exist_ok=True)
-    out_path = Path(base, "processed", f"{sample_name}_size_debug.png")
-    cv2.imwrite(str(out_path), vis)
-        
+    # No return; results are written into PlantCV outputs as in the existing pipeline

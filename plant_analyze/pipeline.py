@@ -8,8 +8,8 @@ from .io_utils import safe_readimage
 from .masking import clean_mask, ensure_binary, get_initial_mask
 from .roi_top import make_grid_rois
 from .roi_side import make_side_roi
-from .analyze_top import analyze_one_top, add_global_density_and_color
-from .analyze_side import analyze_one_side, _analyze_color_side
+from .analyze_top import analyze_one_top, add_global_density_and_color, save_top_overlay
+from .analyze_side import analyze_one_side
 from .calibration import get_scale_from_checkerboard
 
 _LAST_MM_PER_PX = getattr(cfg, "_LAST_MM_PER_PX", None)
@@ -183,35 +183,86 @@ def run_one_image(rgb_img, filename):
             per_slot_count = 0
             per_slot_area_sum = 0
 
-            # วนวิเคราะห์รายต้น (plant)
-            for j in range(1, int(n_labels) + 1):
-                single = np.where(labeled_mask == j, 255, 0).astype(np.uint8)
-                if cv2.countNonZero(single) < getattr(cfg, "MIN_PLANT_AREA", 200):
+            r = i // cfg.COLS + 1
+            c = i %  cfg.COLS + 1
+            per_slot_area_sum = 0
+
+            if getattr(cfg, "MERGE_COMPONENTS_PER_SLOT", False):
+                # --- โหมดรวมก้อนทั้งหมดใน ROI ---
+                merged = np.where(labeled_mask > 0, 255, 0).astype(np.uint8)
+
+                if cv2.countNonZero(merged) < getattr(cfg, "MIN_PLANT_AREA", 200):
                     continue
 
-                # ขนาดต่อ plant
-                area_px = int(cv2.countNonZero(single))
-                per_slot_area_sum += area_px
+                area_px = int(cv2.countNonZero(merged))
+                per_slot_area_sum = area_px
+
                 pcv.outputs.add_observation(
-                    sample=f"slot_{r}_{c}_obj{j}", variable="area_px",
-                    trait="area", method="countNonZero", scale="px",
+                    sample=f"slot_{r}_{c}", variable="area_px",
+                    trait="area", method="countNonZero(union)", scale="px",
                     datatype=int, value=area_px, label="area_px"
                 )
                 mm2 = _area_mm2_from_px(area_px)
                 if mm2 is not None:
                     pcv.outputs.add_observation(
-                        sample=f"slot_{r}_{c}_obj{j}", variable="area_mm2",
+                        sample=f"slot_{r}_{c}", variable="area_mm2",
                         trait="area", method="px_to_mm2", scale="mm2",
                         datatype=float, value=float(mm2), label="area_mm2"
                     )
 
-                # รวมหน้ากาก/วิเคราะห์สี‑รูปร่างราย plant
-                union_mask = cv2.bitwise_or(union_mask, single)
+                # ใช้ analyze_one_top บน union ทั้งหมด
+                union_mask = cv2.bitwise_or(union_mask, merged)
                 union_mask = ensure_binary(union_mask)
-                analyze_one_top(single, f"slot_{r}_{c}_obj{j}", eff_r, rgb_img)
-
-                per_slot_count += 1
+                analyze_one_top(merged, f"slot_{r}_{c}", eff_r, rgb_img)
+                if getattr(cfg, "SAVE_TOP_OVERLAY", True):
+                    save_top_overlay(
+                        rgb_img=rgb_img,
+                        slot_mask=merged,
+                        contours=None,
+                        eff_r=eff_r,
+                        sample_name=f"slot_{r}_{c}",
+                        mm_per_px=getattr(cfg, "MM_PER_PX", None),
+                    )
                 slots_with_obj += 1
+                per_slot_count = 1
+
+            else:
+                # --- โหมดเดิม: วนราย obj ---
+                per_slot_count = 0
+                for j in range(1, int(n_labels) + 1):
+                    single = np.where(labeled_mask == j, 255, 0).astype(np.uint8)
+                    if cv2.countNonZero(single) < getattr(cfg, "MIN_PLANT_AREA", 200):
+                        continue
+
+                    area_px = int(cv2.countNonZero(single))
+                    per_slot_area_sum += area_px
+                    pcv.outputs.add_observation(
+                        sample=f"slot_{r}_{c}_obj{j}", variable="area_px",
+                        trait="area", method="countNonZero", scale="px",
+                        datatype=int, value=area_px, label="area_px"
+                    )
+                    mm2 = _area_mm2_from_px(area_px)
+                    if mm2 is not None:
+                        pcv.outputs.add_observation(
+                            sample=f"slot_{r}_{c}_obj{j}", variable="area_mm2",
+                            trait="area", method="px_to_mm2", scale="mm2",
+                            datatype=float, value=float(mm2), label="area_mm2"
+                        )
+
+                    union_mask = cv2.bitwise_or(union_mask, single)
+                    union_mask = ensure_binary(union_mask)
+                    analyze_one_top(single, f"slot_{r}_{c}_obj{j}", eff_r, rgb_img)
+                    if getattr(cfg, "SAVE_TOP_OVERLAY", True):
+                        save_top_overlay(
+                            rgb_img=rgb_img,
+                            slot_mask=single,
+                            contours=None,
+                            eff_r=eff_r,
+                            sample_name=f"slot_{r}_{c}_obj{j}",
+                            mm_per_px=getattr(cfg, "MM_PER_PX", None),
+                        )
+                    per_slot_count += 1
+                    slots_with_obj += 1
 
             # บันทึกจำนวน/พื้นที่รวมต่อ slot
             pcv.outputs.add_observation(
@@ -221,8 +272,8 @@ def run_one_image(rgb_img, filename):
             )
             pcv.outputs.add_observation(
                 sample=f"slot_{r}_{c}", variable="slot_area_sum_px",
-                trait="area", method="sum(label_area)", scale="px",
-                datatype=int, value=int(per_slot_area_sum), label="slot_area_sum_px"
+                trait="area", method="sum(label_area)" if not getattr(cfg, "MERGE_COMPONENTS_PER_SLOT", False) else "countNonZero(union)",
+                scale="px", datatype=int, value=int(per_slot_area_sum), label="slot_area_sum_px"
             )
             mm2_slot = _area_mm2_from_px(per_slot_area_sum)
             if mm2_slot is not None:
@@ -266,9 +317,9 @@ def run_one_image(rgb_img, filename):
     if cv2.countNonZero(slot_mask) == 0:
         raise RuntimeError("No objects inside side ROI.")
         
-    analyze_one_side(slot_mask, "default", rgb_img)
-    roi_img = rgb_img[y:y+h, x:x+W].copy()
-    analyze_one_side(slot_mask, "default", roi_img)
+    roi_img  = rgb_img[y:y+h, x:x+w].copy()
+    roi_mask = slot_mask[y:y+h, x:x+w].copy()
+    analyze_one_side(roi_mask, "default", roi_img)
     extra = {
         "filename": filename,
         "view": "side",
