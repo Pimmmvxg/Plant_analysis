@@ -93,7 +93,7 @@ def analyze_one_top(slot_mask, sample_name, eff_r, rgb_img):
         perim_sum = float(sum(cv2.arcLength(c, True) for c in contours))
         perim = perim_sum
 
-        # hull รวม = hull(all_points)
+        # hull รวม = hull(all_points) ;รูปหลายเหลี่ยมที่คลุมวัคถุ
         all_pts = np.vstack(contours)
         hull = cv2.convexHull(all_pts)
         a_hull = float(cv2.contourArea(hull)) if len(hull) >= 3 else 0.0
@@ -153,9 +153,6 @@ def save_top_overlay(
       - centroid ของ union mask (แดง)
       - วงกลม ROI (รัศมี eff_r) รอบ centroid
       - แถบข้อความสรุป: 'สีหลัก' และ 'พื้นที่หน่วยจริง' (ถ้ามี mm_per_px) มิฉะนั้นแสดงเป็น px²
-
-    เซฟรูปเป็น: {pcv.params.debug_outdir}/{sample_name}_top_overlay.png
-    คืนค่าเป็น path ไฟล์ที่เซฟ
     """
     import os
     import numpy as np

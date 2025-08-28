@@ -10,7 +10,6 @@ from plantcv import plantcv as pcv
 from . import config as cfg
 from .masking import ensure_binary
 
-
 # ---------------------------- Data class (optional) ---------------------------- #
 @dataclass
 class SideBBox:
@@ -35,10 +34,8 @@ def _bbox_from_mask(m: np.ndarray) -> SideBBox:
         return SideBBox(0, 0, 0, 0)
     return SideBBox(int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
 
-
 def _skeletonize(mask: np.ndarray) -> np.ndarray:
     return pcv.morphology.skeletonize(mask=mask)
-
 
 def _prune_robust(skel: np.ndarray, mask: np.ndarray) -> np.ndarray:
     """Iteratively prune; tolerate different PlantCV return signatures."""
@@ -55,7 +52,6 @@ def _prune_robust(skel: np.ndarray, mask: np.ndarray) -> np.ndarray:
         except Exception:
             pass
     return pruned
-
 
 def _find_endpoints(skel: np.ndarray) -> np.ndarray:
     """Return Nx2 array of (y,x) coords for pixels with degree==1."""
@@ -79,10 +75,6 @@ def _px_to_mm(px: float) -> Optional[float]:
     except Exception:
         return None
     return float(px) * mm_per_px
-
-
-# ---------------------------- Core API ---------------------------- #
-# ---------------------------- Core API + Debug helpers ---------------------------- #
 
 def _save_debug(img: np.ndarray, name: str) -> None:
     try:

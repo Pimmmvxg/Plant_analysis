@@ -6,8 +6,8 @@ from plantcv import plantcv as pcv
 
 def get_scale_from_checkerboard(
     image,
-    square_size_mm=8.0,
-    pattern_size=(4, 4),
+    square_size_mm=2.5,
+    pattern_size=(7, 7),
     previous_scale=None,
     fallback_scale=10.0 / 51.0,
     refine=True,
@@ -19,7 +19,7 @@ def get_scale_from_checkerboard(
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    flags = cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE | cv2.CALIB_CB_FAST_CHECK
+    flags = cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE
     found, corners = cv2.findChessboardCorners(gray, pattern_size, flags)
 
     if found and refine:

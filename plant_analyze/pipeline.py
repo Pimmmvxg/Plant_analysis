@@ -33,6 +33,9 @@ def run_one_image(rgb_img, filename):
     pcv.outputs.add_observation(sample='default', variable='mm_per_px',
                                 trait='scale', method=scale_info, scale='mm/px',
                                 datatype=float, value=float(mm_per_px), label='mm_per_px')
+    pcv.outputs.add_observation(sample='default', variable='scale_source',
+                            trait='text', method='scale_info', scale='none',
+                            datatype=str, value=scale_info, label='scale_source')
     
     # 1) initial mask (auto ถ้าไม่กำหนด, manual ถ้าตั้ง MASK_PATH/MASK_SPEC)
     mask0, info = get_initial_mask(rgb_img)
@@ -320,6 +323,17 @@ def run_one_image(rgb_img, filename):
     roi_img  = rgb_img[y:y+h, x:x+w].copy()
     roi_mask = slot_mask[y:y+h, x:x+w].copy()
     analyze_one_side(roi_mask, "default", roi_img)
+    
+    add_global_density_and_color(roi_img, roi_mask)
+    
+    save_top_overlay(
+        rgb_img=roi_img,
+        slot_mask=roi_mask,
+        contours=None,
+        eff_r=None,                 # ไม่มีวงกลม ROI ก็ปล่อย None ได้
+        sample_name="side",         # ชื่อไฟล์จะเป็น side_top_overlay.png
+        mm_per_px=getattr(cfg, "MM_PER_PX", None),
+    )
     extra = {
         "filename": filename,
         "view": "side",

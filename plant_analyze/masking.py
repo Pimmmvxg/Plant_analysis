@@ -43,7 +43,6 @@ def ensure_binary(mask, normalize_orientation: bool = True):
         H, W = mm.shape[:2]
         area_total = max(H * W, 1)
         ratio = float(cv2.countNonZero(mm)) / area_total
-        
 
         # นับคอนทัวร์ + วัด solidity ของก้อนใหญ่สุด
         _fc = cv2.findContours(mm.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -79,7 +78,10 @@ def ensure_binary(mask, normalize_orientation: bool = True):
             comp_score = +0.3  # อยู่ในช่วงพอดี
 
         # เกณฑ์รวม: coverage ใกล้ 0.30 ดี + คะแนนตามจำนวนก้อน + solidity สูงดี
-        coverage_score = (1.0 - abs(0.30 - ratio))
+        #coverage_score = (1.0 - abs(0.30 - ratio))
+        target = float(getattr(cfg, "MASK_TARGET_COVERAGE", 0.05))
+        coverage_score = (1.0 - abs(target - ratio))
+
         
         top_touch    = np.count_nonzero(mm[0, :] > 0)
         bottom_touch = np.count_nonzero(mm[-1, :] > 0)
@@ -100,10 +102,13 @@ def ensure_binary(mask, normalize_orientation: bool = True):
         # หักคะแนนตามจำนวนด้านที่แตะ + ความยาวที่แตะ
         border_penalty = 0.4 * n_edges + 0.6 * edge_strength
        
-        return coverage_score + comp_score + 0.5 * solidity
+        return (cfg.W_COVERAGE * coverage_score
+        + cfg.W_COMPONENTS * comp_score
+        + cfg.W_SOLIDITY * solidity
+        - cfg.W_BORDER * border_penalty)
+
 
     return m if _score(m) >= _score(m_inv) else m_inv
-
 
 def _keep_top_k_components(m: np.ndarray, k: int) -> np.ndarray:
     """เก็บ k ก้อนใหญ่ที่สุด (connected components)"""
@@ -122,7 +127,7 @@ def _keep_top_k_components(m: np.ndarray, k: int) -> np.ndarray:
 
 
 # ---------- Public APIs ----------
-def clean_mask(m, close_ksize=3, min_obj_size=50, keep_largest=False, keep_top_k=None):
+def clean_mask(m, close_ksize=3, min_obj_size=60, keep_largest=False, keep_top_k=None):
     """
     ทำความสะอาดมาสก์:
     - ปิดรู/เชื่อมช่องว่างด้วย morphological close (ขนาด kernel = close_ksize)
@@ -133,7 +138,7 @@ def clean_mask(m, close_ksize=3, min_obj_size=50, keep_largest=False, keep_top_k
     if m is None:
         return m
 
-    # Normalize ตั้งแต่ต้นน้ำ
+    # Normalize
     m = ensure_binary(m, normalize_orientation=True)
 
     # 1) close
@@ -200,8 +205,6 @@ def auto_select_mask(rgb_img):
             "Width_shape": width_shape,
             "n_components": 0,
             "solidity": 0.0,
-            "Height_shape": height_shape,
-            "Width_shape": width_shape,
             "Height_mm": h_mm,
             "Width_mm": w_mm,
         }
@@ -252,8 +255,42 @@ def auto_select_mask(rgb_img):
 
             ratio = float(np.count_nonzero(m)) / max(area_total, 1)
 
-            # เกณฑ์ให้คะแนน: ใกล้ 0.30 ดี, ชิ้นส่วนน้อยดี, solidity สูงดี
-            score = (1.0 - abs(0.30 - ratio)) - 0.1 * max(0, n_comp - 1) + 0.5 * solidity
+            # --- เกณฑ์แบบ view-aware + ควบคุมด้วย config ---
+            target = float(getattr(cfg, "MASK_TARGET_COVERAGE", 0.05))
+            view = str(getattr(cfg, "VIEW", "top")).lower()
+            if view == "top":
+                exp_min = int(getattr(cfg, "TOP_EXPECT_N_MIN", 5))
+                exp_max = int(getattr(cfg, "TOP_EXPECT_N_MAX", 6))
+            else:
+                exp_min = int(getattr(cfg, "SIDE_EXPECT_N_MIN", 1))
+                exp_max = int(getattr(cfg, "SIDE_EXPECT_N_MAX", 1))
+
+            # คะแนนจำนวนก้อน (ให้รางวัลเมื่ออยู่ในช่วงคาดหวัง)
+            if n_comp == 0:
+                comp_score = -1.0
+            elif n_comp < exp_min:
+                comp_score = -0.2 * float(exp_min - n_comp)
+            elif n_comp > exp_max:
+                comp_score = -0.2 * float(n_comp - exp_max)
+            else:
+                comp_score = +0.3
+
+            # โทษชนขอบภาพ (border penalty)
+            H, W = m.shape[:2]
+            top_p    = np.count_nonzero(m[0,  :] > 0) / max(W, 1)
+            bottom_p = np.count_nonzero(m[-1, :] > 0) / max(W, 1)
+            left_p   = np.count_nonzero(m[:,  0] > 0) / max(H, 1)
+            right_p  = np.count_nonzero(m[:, -1] > 0) / max(H, 1)
+            n_edges = sum(p > 0.5 for p in (top_p, bottom_p, left_p, right_p))
+            edge_strength = top_p + bottom_p + left_p + right_p
+            border_penalty = 0.4 * n_edges + 0.6 * edge_strength
+
+            # สรุปคะแนน
+            score = (cfg.W_COVERAGE * (1.0 - abs(target - ratio))
+            + cfg.W_COMPONENTS * comp_score
+            + cfg.W_SOLIDITY * solidity
+            - cfg.W_BORDER * border_penalty)
+
 
             candidates.append((score, name, m, ratio, n_comp, solidity, kind, obj_type, ksz))
         except Exception:
@@ -333,14 +370,27 @@ def _mask_from_spec(rgb_img, spec: dict):
     offset = spec.get("offset", 0)
 
     gray = _gray_from_channel(rgb_img, ch)
-    if method == "otsu":
+    
+    if method == "binary":
+        thr = int(spec.get("threshold", 128))
+        # safety clamp
+        if thr < 0: thr = 0
+        if thr > 255: thr = 255
+        m = pcv.threshold.binary(gray_img=gray, threshold=thr, object_type=obj)
+
+    elif method == "otsu":
         m = pcv.threshold.otsu(gray_img=gray, object_type=obj)
+
     elif method == "triangle":
         m = pcv.threshold.triangle(gray_img=gray, object_type=obj)
+
     else:
+        # gaussian ต้องมี ksize
         if not ksize:
             raise ValueError("MASK_SPEC requires 'ksize' for gaussian.")
-        m = pcv.threshold.gaussian(gray_img=gray, ksize=int(ksize), offset=int(offset), object_type=obj)
+        m = pcv.threshold.gaussian(
+            gray_img=gray, ksize=int(ksize), offset=int(offset), object_type=obj
+        )
     H, W = rgb_img.shape[:2]      
     height_shape = H
     width_shape = W
@@ -402,4 +452,8 @@ def get_initial_mask(rgb_img):
     m, info = auto_select_mask(rgb_img)
     info = dict(info or {})
     info["source"] = "auto"
-    return ensure_binary(m), info
+    m = ensure_binary(m, normalize_orientation=True)
+    if getattr(cfg, "FORCE_OBJECT_WHITE", False):
+        if cv2.countNonZero(m) > (m.size // 2):
+            m = cv2.bitwise_not(m)
+    return m, info
