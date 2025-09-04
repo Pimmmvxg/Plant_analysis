@@ -9,6 +9,7 @@ from plantcv import plantcv as pcv
 
 from . import config as cfg
 from .masking import ensure_binary
+from .color import get_color_name
 
 # ---------------------------- Data class (optional) ---------------------------- #
 @dataclass
@@ -90,7 +91,7 @@ def _draw_size_overlay(mask: np.ndarray, rgb: np.ndarray, bbox: SideBBox,
     vis = rgb.copy()
     # mask outline
     cnts, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cv2.drawContours(vis, cnts, -1, (0, 255, 255), 2)
+    cv2.drawContours(vis, cnts, -1, (250, 20, 20), 2)
 
     # bbox + dimensions text
     cv2.rectangle(vis, (bbox.x_min, bbox.y_min), (bbox.x_max, bbox.y_max), (0, 255, 0), 2)
@@ -100,8 +101,22 @@ def _draw_size_overlay(mask: np.ndarray, rgb: np.ndarray, bbox: SideBBox,
     # Annotations
     txt1 = f"H: {height_px:.1f}px" + (f" ({height_mm:.1f} mm)" if height_mm is not None else "")
     txt2 = f"L: {length_px:.1f}px" + (f" ({length_mm:.1f} mm)" if length_mm is not None else "")
-    cv2.putText(vis, txt1, (bbox.x_min, max(0, bbox.y_min-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (50,220,50), 2, cv2.LINE_AA)
-    cv2.putText(vis, txt2, (bbox.x_min, min(vis.shape[0]-5, bbox.y_max+20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (50,220,50), 2, cv2.LINE_AA)
+    # กำหนดจุดเริ่มต้น (บรรทัดแรก) ใต้ bbox
+    y0 = min(vis.shape[0] - 20, bbox.y_max + 25)
+    line_space = 50  # ระยะห่างระหว่างบรรทัด (px)
+
+    # บรรทัดแรก
+    cv2.putText(vis, txt1,
+                (bbox.x_min, y0),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                (68, 0, 255), 2, cv2.LINE_AA)
+
+    # บรรทัดสอง
+    cv2.putText(vis, txt2,
+                (bbox.x_min, min(vis.shape[0] - 5, y0 + line_space)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                (68, 0, 255), 2, cv2.LINE_AA)
+    
     return vis
 def _draw_shape_overlay(rgb: np.ndarray,
                         shape_height_px: float, shape_length_px: float,
@@ -156,10 +171,15 @@ def analyze_one_side(slot_mask: np.ndarray, sample_name: str, rgb_img: np.ndarra
     # Endpoints
     endpoints = _find_endpoints(pruned)
     n_endpoints = int(endpoints.shape[0])
-
+    
     endpoints_vis = pruned_vis.copy()
-    for (ey, ex) in endpoints:
-        cv2.circle(endpoints_vis, (int(ex), int(ey)), 3, (0, 0, 255), -1)
+    if n_endpoints >= 1:
+        for (ey, ex) in endpoints:
+            cv2.circle(endpoints_vis, (int(ex), int(ey)), 3, (0, 0, 255), -1)
+    else:
+        pcv.outputs.add_observation(sample=sample_name, variable="has_endpoints",
+                                    trait="flag", method="skeleton_endpoints",
+                                    scale="None", datatype=bool, value=False, label="has_endpoints")
     _save_debug(endpoints_vis, f"{sample_name}_side_endpoints.png")
 
     # Size from mask bbox
@@ -188,23 +208,19 @@ def analyze_one_side(slot_mask: np.ndarray, sample_name: str, rgb_img: np.ndarra
     shape_overlay = _draw_shape_overlay(rgb_img, shape_height_px, shape_length_px, shape_height_mm, shape_length_mm)
     _save_debug(shape_overlay, f"{sample_name}_side_shape_overlay.png")
 
-    # (B) PlantCV built-in: pcv.analyze.size (will also emit its own debug image)
+    # (B) PlantCV built-in: pcv.analyze.size
     try:
-        # รองรับความต่างของ signature ในบางเวอร์ชัน
-        try:
-            labeled_mask, n_labels = pcv.create_labels(bin_img=slot_mask)
-        except TypeError:
-            labeled_mask, n_labels = pcv.create_labels(slot_mask)
-
-        pcv.analyze.size(
-            img=rgb_img,                 # หรือใช้ cropped_img ถ้าคุณมี ROI แล้วครอปไว้
-            labeled_mask=labeled_mask,
-            label=sample_name
-        )
+        result = pcv.create_labels(bin_img=slot_mask)
+        if isinstance(result, tuple):
+            labeled_mask, n_labels = result
+        else:
+            labeled_mask = result
+            n_labels = int(np.max(labeled_mask))
+        pcv.analyze.size(img=rgb_img, labeled_mask=labeled_mask, label=sample_name)
     except Exception:
-        # อย่าล้ม pipeline แม้ analyze.size จะ fail
         pass
 
+    
     # ---------------- Record observations ---------------- #
     def _add(var, value, trait, method, scale, dt, label=None):
         pcv.outputs.add_observation(sample=sample_name, variable=var, trait=trait,
@@ -233,7 +249,7 @@ def analyze_one_side(slot_mask: np.ndarray, sample_name: str, rgb_img: np.ndarra
     # Extra: save a consolidated debug with tiles
     try:
         gap = 8
-        h2 = max(img.shape[0] for img in [rgb_img, size_overlay, endpoints_vis])
+        h2 = max(arr.shape[0] for arr in [rgb_img, size_overlay, endpoints_vis])
         w1 = rgb_img.shape[1]
         w2 = size_overlay.shape[1]
         w3 = endpoints_vis.shape[1]
@@ -246,3 +262,204 @@ def analyze_one_side(slot_mask: np.ndarray, sample_name: str, rgb_img: np.ndarra
         pass
 
     # No return; results are written into PlantCV outputs as in the existing pipeline
+def _color_name_under_mask(rgb_img: np.ndarray, mask: np.ndarray) -> tuple[str, float]:
+    """คำนวณ median hue (degree 0..360) ใต้ mask แล้วแปลงเป็นชื่อสีเดียวกับ topview"""
+    if mask.ndim == 3:
+        mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+    m = (mask > 0)
+    if not np.any(m):
+        return "Unknown", 0.0
+    hsv = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2HSV)
+    h = hsv[..., 0][m].astype(np.float32) * 2.0  # OpenCV H 0..179 → degree
+    hue_med = float(np.median(h)) if h.size > 0 else 0.0
+    return get_color_name(hue_med), hue_med
+
+def save_side_overlay(
+    rgb_img: np.ndarray,
+    slot_mask: np.ndarray,
+    sample_name: str = "side",
+    mm_per_px: Optional[float] = None,
+) -> np.ndarray:
+    """
+    วาด overlay สำหรับ side view:
+      - ใช้ size_overlay จาก _draw_size_overlay(...) เป็นพื้น
+      - วาด contour (เหลือง), convex hull (ฟ้า), centroid (แดง)
+      - กล่องข้อความสรุป: "Main Color: <name> | Area: <...>"
+        * area แสดง mm² และ cm² ถ้ามี mm_per_px 
+    """
+    slot_mask = ensure_binary(slot_mask, normalize_orientation=True)
+    if slot_mask is None or cv2.countNonZero(slot_mask) == 0:
+        return rgb_img
+
+    # 1) คำนวณขนาดจาก bbox
+    bbox = _bbox_from_mask(slot_mask)
+    height_px = float(bbox.height)
+    length_px = float(bbox.width)
+    # ใช้สเกลจากพารามิเตอร์ ถ้าไม่ได้ส่งมา จะ fallback ไปใช้ cfg.MM_PER_PX ภายใน _px_to_mm
+    if mm_per_px is None:
+        mm_per_px = getattr(cfg, "MM_PER_PX", None)
+    if mm_per_px is not None:
+        mm_per_px = float(mm_per_px)
+        height_mm = height_px * mm_per_px
+        length_mm = length_px * mm_per_px
+    else:
+        height_mm = None
+        length_mm = None
+
+    # 2) base = size overlay (เส้นกรอบ +ตัวเลข H,L)
+    base = _draw_size_overlay(
+        mask=slot_mask, rgb=rgb_img, bbox=bbox,
+        height_px=height_px, length_px=length_px,
+        height_mm=height_mm, length_mm=length_mm
+    )
+    overlay = base.copy()
+
+    # 3) วาด contour + hull + centroid
+    cnts, _ = cv2.findContours(slot_mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if cnts:
+        # ขอบวัตถุ
+        cv2.drawContours(overlay, cnts, -1, (0, 255, 255), 2)
+        # hull รวม
+        all_pts = np.vstack(cnts)
+        hull = cv2.convexHull(all_pts)
+        if hull is not None and len(hull) >= 3:
+            cv2.polylines(overlay, [hull], True, (255, 0, 255), 2)
+    # centroid
+    M = cv2.moments(slot_mask, binaryImage=True)
+    if M["m00"] > 0:
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"])
+        cv2.circle(overlay, (cx, cy), 4, (0, 0, 255), -1)
+        
+    #สี
+    color_name, hue_med = _color_name_under_mask(rgb_img, slot_mask)
+
+    # 4) กล่องข้อความสรุป (พื้นที่ + H×L)
+    area_px = int(cv2.countNonZero(slot_mask))
+    if mm_per_px is not None and mm_per_px > 0:
+        area_mm2 = float(area_px) * (mm_per_px ** 2)
+        area_cm2 = area_mm2 / 100.0
+        area_text = f"{area_mm2:,.2f} mm² ({area_cm2:,.2f} cm²)"
+    else:
+        area_text = f"{area_px:,} px²"
+
+    text = f"Main Color: {color_name} | Area: {area_text}"
+    y0 = 30
+    pad_w = max(10 + len(text) * 9, 260)
+    cv2.rectangle(overlay, (10, y0 - 22), (10 + pad_w, y0 + 8), (0, 0, 0), -1)
+    cv2.putText(overlay, text, (12, y0),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+
+    _save_debug(overlay, f"{sample_name}_side_overlay.png")
+    return overlay
+
+def get_side_legend(rgb_img: np.ndarray, mask: np.ndarray, label: str,
+                    mm_per_px: Optional[float]) -> str:
+    if mask.ndim == 3:
+        mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+    m = (mask > 0)
+    area_px = int(np.count_nonzero(m))
+    if mm_per_px and mm_per_px > 0:
+        area_mm2 = float(area_px) * (mm_per_px ** 2)
+        area_cm2 = area_mm2 / 100.0
+        area_txt = f"{area_mm2:,.2f} mm*mm ({area_cm2:,.2f} cm*cm)"
+    else:
+        area_txt = f"{area_px:,} px*px"
+
+    hsv = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2HSV)
+    h = hsv[..., 0][m].astype(np.float32) * 2.0
+    hue_med = float(np.median(h)) if h.size > 0 else 0.0
+    color_name = get_color_name(hue_med)
+    
+    #H/L จาก bounding box ของก้อน
+    bbox = _bbox_from_mask(mask)
+    Hpx = float(bbox.height)
+    Lpx = float(bbox.width)
+    if mm_per_px:
+        Htxt = f"{Hpx:.1f}px ({Hpx * mm_per_px:.1f} mm)"
+        Ltxt = f"{Lpx:.1f}px ({Lpx * mm_per_px:.1f} mm)"
+    else:
+        Htxt = f"{Hpx:.1f}px"
+        Ltxt = f"{Lpx:.1f}px"
+
+    return f"{label}: Main Color: {color_name} | Area: {area_txt} | H: {Htxt} | L: {Ltxt}"
+
+
+def combine_side_overlays(
+    rgb_img: np.ndarray,
+    masks: list[np.ndarray],
+    labels: list[str],
+    mm_per_px: Optional[float],
+    out_path: Optional[str] = None
+) -> np.ndarray:
+    """
+    รวม overlay ทุกต้นรวมเป็นภาพเดียว
+    
+    """
+    overlay = rgb_img.copy()
+
+    for mask, label in zip(masks, labels):
+        if mask.ndim == 3:
+            mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+        mask = ensure_binary(mask)
+        if cv2.countNonZero(mask) == 0:
+            continue
+        # คำนวณ H/L ต่อก้อน + วาดลงภาพรวม
+        bbox = _bbox_from_mask(mask)
+        height_px = float(bbox.height)
+        length_px = float(bbox.width)
+
+        height_mm = length_mm = None
+        if mm_per_px is not None and mm_per_px > 0:
+            height_mm = height_px * float(mm_per_px)
+            length_mm = length_px * float(mm_per_px)
+
+        # วาดกรอบ + เส้นวัด + ตัวเลข H/L ลงบน "overlay" เฟรมรวม
+        overlay = _draw_size_overlay(
+            mask=mask, rgb=overlay, bbox=bbox,
+            height_px=height_px, length_px=length_px,
+            height_mm=height_mm, length_mm=length_mm
+        )
+
+        # กรอบ/ขอบวัตถุ
+        cnts, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if cnts:
+            cv2.drawContours(overlay, cnts, -1, (0, 255, 255), 2)  # เหลือง
+            all_pts = np.vstack(cnts)
+            hull = cv2.convexHull(all_pts)
+            if hull is not None and len(hull) >= 3:
+                cv2.polylines(overlay, [hull], True, (255, 0, 255), 2)  # ม่วง
+
+        # centroid
+        M = cv2.moments(mask, binaryImage=True)
+        if M["m00"] > 0:
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
+            cv2.circle(overlay, (cx, cy), 4, (0, 0, 255), -1)
+
+    # แถบสรุปด้านบนรวมทุกก้อน
+    legend_lines = []
+    for mask, label in zip(masks, labels):
+        legend_lines.append(get_side_legend(rgb_img, mask, label, mm_per_px))
+
+    if legend_lines:
+        pad_x, pad_y = 12, 10
+        line_h = 38
+        bar_h = pad_y * 2 + line_h * len(legend_lines)
+        bar_w = max(overlay.shape[1], int(12 + max(len(s) for s in legend_lines) * 9))
+        bar = np.zeros((bar_h, bar_w, 3), dtype=np.uint8)
+        for i, line in enumerate(legend_lines):
+            y = pad_y + (i + 1) * line_h - 10
+            cv2.putText(bar, line, (pad_x, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2, cv2.LINE_AA)
+
+        out = np.zeros((bar_h + overlay.shape[0], max(bar_w, overlay.shape[1]), 3), dtype=np.uint8)
+        out[:bar_h, :bar_w] = bar
+        out[bar_h:bar_h + overlay.shape[0], :overlay.shape[1]] = overlay
+    else:
+        out = overlay
+
+    if out_path:
+        _save_debug(out, Path(out_path).name)
+        cv2.imwrite(out_path, out)
+    return out

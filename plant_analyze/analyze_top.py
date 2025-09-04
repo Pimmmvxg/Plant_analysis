@@ -2,6 +2,13 @@ import numpy as np
 import cv2
 from plantcv import plantcv as pcv
 from .color import get_color_name
+from typing import Optional, List, Tuple
+
+import json
+import os
+import re
+import glob
+import math
 
 def _safe_starts(arr):
     if arr is None or len(arr) == 0:
@@ -136,113 +143,269 @@ def analyze_one_top(slot_mask, sample_name, eff_r, rgb_img):
     pcv.outputs.add_observation(sample=sample_name, variable='color_name',
                                 trait='text', method='hue_median→name', scale='none',
                                 datatype=str, value=col_name, label='dominant color')
-    
 def save_top_overlay(
     rgb_img,
     slot_mask,
     contours=None,
     eff_r=None,
     sample_name="default",
-    mm_per_px: float | None = None,  # ตัวเลือก: ใส่สเกลจริง (มม./พิกเซล) เพื่อแปลงพื้นที่
-):
+    mm_per_px: float | None = None,
+    slot_label: str | None = None,
+) -> str:
     """
-    วาด overlay รวมทุกคอนทัวร์ใน ROI:
-      - contours ทั้งหมด (เขียว)
-      - convex hull ของจุดรวมทั้งหมด (ฟ้า)
-      - bounding box ของ hull รวม (เหลือง)
+    เซฟภาพ overlay ราย slot:
+      - คอนทัวร์ทุกก้อน (เขียว)
+      - convex hull รวม (ฟ้า)
+      - bounding box ของ hull (เหลือง)
       - centroid ของ union mask (แดง)
-      - วงกลม ROI (รัศมี eff_r) รอบ centroid
-      - แถบข้อความสรุป: 'สีหลัก' และ 'พื้นที่หน่วยจริง' (ถ้ามี mm_per_px) มิฉะนั้นแสดงเป็น px²
+      - วงกลม ROI รัศมี eff_r (ม่วง) รอบ centroid (ถ้ามี)
+      - แถบสรุปบนสุด: '<slot_label> | Main Color | Area'
+
+    Return: เส้นทางไฟล์ภาพที่บันทึก
     """
     import os
-    import numpy as np
-    import cv2
-    from plantcv import plantcv as pcv
-    try:
-        from .color import get_color_name
-    except Exception:
-        # fallback เผื่อเรียกใช้แบบสแตนด์อโลน
-        def get_color_name(hue_degree: float) -> str:
-            return "unknown"
+    import json
 
-    if rgb_img is None or slot_mask is None:
-        return None
+    if slot_mask is None:
+        raise RuntimeError("save_top_overlay: slot_mask is None")
+    # ให้เป็น binary uint8 0/255
+    if slot_mask.ndim == 3:
+        slot_mask = cv2.cvtColor(slot_mask, cv2.COLOR_BGR2GRAY)
+    if slot_mask.dtype != np.uint8:
+        slot_mask = slot_mask.astype(np.uint8)
+    slot_mask = np.where(slot_mask > 0, 255, 0).astype(np.uint8)
 
-    # --- ทำให้ mask เป็น binary uint8: วัตถุ = 255, ฉากหลัง = 0 ---
-    m = slot_mask
-    if m.ndim == 3:
-        m = cv2.cvtColor(m, cv2.COLOR_BGR2GRAY)
-    if m.dtype != np.uint8:
-        m = m.astype(np.uint8)
-    m = np.where(m > 0, 255, 0).astype(np.uint8)
+    H, W = rgb_img.shape[:2]
+    vis = rgb_img.copy()
 
-    # --- หา contours ถ้าไม่ส่งเข้ามา ---
+    # หา contours ถ้าไม่ได้ส่งมา
     if contours is None:
-        _fc = cv2.findContours(m.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        _fc = cv2.findContours(slot_mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         contours = _fc[2] if len(_fc) == 3 else _fc[0]
 
-    overlay = rgb_img.copy()
-
-    # 1) วาดทุกคอนทัวร์ = เขียว (BGR: 0,255,0)
+    # วาดคอนทัวร์ทุกก้อน (เขียว)
     if contours:
-        cv2.drawContours(overlay, contours, -1, (0, 255, 0), 2)
+        cv2.drawContours(vis, contours, -1, (0, 255, 0), 2)
 
-    # 2) วาด convex hull รวม = ฟ้า (BGR: 255,0,0) และ bbox = เหลือง (BGR: 0,255,255)
+    # รวมทุกจุดของทุกคอนทัวร์เพื่อทำ hull/bbox รวม
+    all_pts = None
+    if contours:
+        all_pts = np.vstack(contours) if len(contours) > 0 else None
+
     hull = None
-    if contours:
-        all_pts = np.vstack(contours)  # (N,1,2)
+    if all_pts is not None and len(all_pts) >= 3:
         hull = cv2.convexHull(all_pts)
-        cv2.drawContours(overlay, [hull], -1, (255, 0, 0), 2)  # ฟ้า
+        # วาด hull (ฟ้า)
+        cv2.drawContours(vis, [hull], -1, (255, 0, 0), 2)
+        # วาด bbox ของ hull (เหลือง)
         x, y, w, h = cv2.boundingRect(hull)
-        cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 255, 255), 2)  # เหลือง
+        cv2.rectangle(vis, (x, y), (x + w, y + h), (0, 255, 255), 2)
 
-    # 3) centroid ของ union mask + วงกลม ROI (ชมพู/ม่วง BGR: 255,0,255)
-    M = cv2.moments(m, binaryImage=True)
+    # centroid ของ union mask
+    M = cv2.moments(slot_mask, binaryImage=True)
     cx = cy = None
-    if M["m00"] != 0:
+    if M["m00"] > 0:
         cx = int(M["m10"] / M["m00"])
         cy = int(M["m01"] / M["m00"])
-        cv2.circle(overlay, (cx, cy), 4, (0, 0, 255), -1)  # แดง
+        cv2.circle(vis, (cx, cy), 5, (0, 0, 255), -1)  # แดง
         if eff_r is not None and eff_r > 0:
-            cv2.circle(overlay, (cx, cy), int(eff_r), (255, 0, 255), 2)
+            cv2.circle(vis, (cx, cy), int(eff_r), (255, 0, 255), 2)  # วงกลม ROI (ม่วง)
 
-    # 4) คำนวณสีหลัก (hue median ภายใน mask) -> ชื่อสี
+    # พื้นที่/สีหลักในมาสก์
+    area_px = int(cv2.countNonZero(slot_mask))
+    area_text = f"{area_px:,} px*px"
+    area_mm2 = None
+    if mm_per_px is not None and mm_per_px > 0:
+        area_mm2 = float(area_px) * (mm_per_px ** 2)
+        cm2 = area_mm2 / 100.0
+        area_text = f"{area_mm2:,.2f} mm*mm ({cm2:,.2f} cm*cm)"
+
     hsv = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2HSV)
     h, s, v = cv2.split(hsv)
-    mask_idx = (m > 0)
+    mask_idx = slot_mask > 0
     if np.count_nonzero(mask_idx) > 0:
-        hue_deg = (h[mask_idx].astype(np.float32) * 2.0)  # OpenCV H: 0..179 → degree
+        hue_deg = (h[mask_idx].astype(np.float32) * 2.0)
         hue_med = float(np.median(hue_deg))
         color_name = get_color_name(hue_med)
     else:
-        hue_med = 0.0
         color_name = "unknown"
 
-    # 5) พื้นที่หน่วยจริง (ถ้ามี mm_per_px) ถ้าไม่มีเป็น px²
-    area_px = int(cv2.countNonZero(m))
-    if mm_per_px is not None and mm_per_px > 0:
-        area_mm2 = float(area_px) * (mm_per_px ** 2)
-        area_cm2 = area_mm2 / 100.0
-        area_text = f"{area_mm2:,.2f} mm² ({area_cm2:,.2f} cm²)"
-    else:
-        area_text = f"{area_px:,} px²"
-
-    # 6) แถบข้อความสรุป
-    text = f"Main Color: {color_name} | Area: {area_text}"
+    # ข้อความสรุปบนสุด
+    label = slot_label or str(sample_name)
+    text = f"{label} | Main Color: {color_name} | Area: {area_text}"
     y0 = 30
-    pad_w = max(10 + len(text) * 9, 260)  # กันข้อความโดนตัด
-    cv2.rectangle(overlay, (10, y0 - 22), (10 + pad_w, y0 + 8), (0, 0, 0), -1)  # พื้นดำทึบ
-    cv2.putText(overlay, text, (12, y0),
+    pad_w = max(10 + len(text) * 9, 560)  # กันข้อความโดนตัด
+    cv2.rectangle(vis, (10, y0 - 22), (10 + pad_w, y0 + 8), (0, 0, 0), -1)  # พื้นดำทึบ
+    cv2.putText(vis, text, (12, y0),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
 
-    # 7) บันทึกไฟล์
-    outdir = pcv.params.debug_outdir or "."
-    os.makedirs(outdir, exist_ok=True)
-    out_path = os.path.join(outdir, f"{sample_name}_top_overlay.png")
+    # เตรียมที่เซฟ
+    out_dir = pcv.params.debug_outdir or "./processed"
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{sample_name}_top_overlay.png")
+
+    # เซฟภาพ
+    try:
+        cv2.imwrite(out_path, vis)
+    except Exception:
+        pcv.print_image(img=vis, filename=out_path)
+
+    # เซฟ meta (เผื่อใช้รวม/รีพอร์ต)
+    meta = {
+        "sample": sample_name,
+        "slot_label": label,
+        "area_px": int(area_px),
+        "area_mm2": float(area_mm2) if area_mm2 is not None else None,
+        "color_name": color_name,
+        "eff_r": float(eff_r) if eff_r is not None else None,
+        "overlay_path": out_path,
+    }
+    try:
+        with open(os.path.join(out_dir, f"{sample_name}_top_overlay.meta.json"), "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+    return out_path
+
+def combine_top_overlays(
+    rgb_img: np.ndarray,
+    slot_masks: List[np.ndarray],
+    labels: Optional[List[str]] = None,
+    eff_r: Optional[float] = None,
+    mm_per_px: Optional[float] = None,
+    out_path: Optional[str] = None,
+) -> Optional[str]:
+    """
+    รวม overlay ของทุกต้นให้อยู่ในภาพเดียว:
+      - วาด contour ของแต่ละต้น (เขียว)
+      - วาง label แต่ละต้นบนจุด centroid
+      - สร้าง union mask เพื่อ:
+          * หา convex hull รวม (ฟ้า)
+          * วาด bbox รวม (เหลือง)
+          * วาง centroid รวม (แดง)
+      - คำนวณ 'Main Color + Area' ของแต่ละต้น แล้วสรุปเป็นแผงข้อความด้านบน:
+          'slot name | Main Color | Area'
+    """
+    try:
+        from .color import get_color_name
+    except Exception:
+        def get_color_name(_): return "unknown"
+
+    if rgb_img is None or not slot_masks:
+        return None
+
+    # เตรียมภาพ/มาสก์
+    overlay = rgb_img.copy()
+    H, W = overlay.shape[:2]
+    union_mask = np.zeros((H, W), dtype=np.uint8)
+    all_contours_pts = []
+
+    hsv = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2HSV)
+    Hc, Sc, Vc = cv2.split(hsv)
+
+    # เก็บบรรทัดสรุปต่อ 'ต้น'
+    legend_lines = []
+
+    # ช่วยแปลง/วัดพื้นที่
+    def _ensure_bin(m: np.ndarray) -> np.ndarray:
+        if m.ndim == 3:
+            m = cv2.cvtColor(m, cv2.COLOR_BGR2GRAY)
+        if m.dtype != np.uint8:
+            m = m.astype(np.uint8)
+        return np.where(m > 0, 255, 0).astype(np.uint8)
+
+    def _area_text(px_area: int) -> str:
+        if mm_per_px is not None and mm_per_px > 0:
+            mm2 = float(px_area) * (mm_per_px ** 2)
+            cm2 = mm2 / 100.0
+            return f"{mm2:,.2f} mm*mm ({cm2:,.2f} cm*cm)"
+        return f"{px_area:,} px*px"
+
+    # วาดต่อ-ต้น
+    for i, m in enumerate(slot_masks):
+        if m is None:
+            continue
+        m = _ensure_bin(m)
+        if cv2.countNonZero(m) == 0:
+            continue
+
+        # รวมเข้ายูนิออน
+        union_mask = cv2.bitwise_or(union_mask, m)
+
+        # คอนทัวร์สีเขียว
+        _fc = cv2.findContours(m.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours = _fc[2] if len(_fc) == 3 else _fc[0]
+        if contours:
+            this_pts = np.vstack(contours)
+            if this_pts is not None and len(this_pts) >= 3:
+                this_hull = cv2.convexHull(this_pts)
+                if this_hull is not None and len(this_hull) >= 3:
+                    cv2.drawContours(overlay, [this_hull], -1, (60, 255, 0), 3)      # green
+                    x, y, w, h = cv2.boundingRect(this_hull)
+                    cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 255, 255), 3)  # เหลือง
+
+        # centroid แต่ละต้น + label
+        M = cv2.moments(m, binaryImage=True)
+        cx = cy = None
+        if M["m00"] > 0:
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
+            cv2.circle(overlay, (cx, cy), 3, (0, 255, 255), -1)  # จุด centroid (เหลือง)
+            if eff_r is not None and eff_r > 0:
+                cv2.circle(overlay, (cx, cy), int(eff_r), (255, 0, 255), 3)
+
+        # ค่าสี/พื้นที่ต่อ-ต้น
+        mask_idx = m > 0
+        area_px = int(cv2.countNonZero(m))
+        if np.count_nonzero(mask_idx) > 0:
+            hue_deg = (Hc[mask_idx].astype(np.float32) * 2.0)
+            hue_med = float(np.median(hue_deg))
+            color_name = get_color_name(hue_med)
+        else:
+            color_name = "unknown"
+
+        slot_name = (labels[i] if labels and i < len(labels) and labels[i] else f"obj{i+1}")
+        area_str = _area_text(area_px)
+
+        # เขียน label สั้นๆ ข้าง centroid ของต้นนั้น
+        if cx is not None and cy is not None:
+            small = f"{slot_name}"
+            cv2.putText(overlay, small, (cx + 6, cy - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2, cv2.LINE_AA)
+
+        # เก็บเข้ารายการ legend
+        legend_lines.append(f"{slot_name} | Main Color: {color_name} | Area: {area_str}")
+
+    # สรุปด้านบน (1 ต้น = 1 บรรทัด)
+    if legend_lines:
+        pad_x = 12
+        pad_y = 10
+        line_h = 52
+        bar_h = pad_y * 2 + line_h * len(legend_lines)
+        bar_w = max(560, int(12 + max(len(s) for s in legend_lines) * 9))
+
+        # ขยายแคนวาสด้านบนเพื่อวางแผงสรุป
+        new_canvas = np.zeros((bar_h + H, max(bar_w, W), 3), dtype=np.uint8)
+        new_canvas[:bar_h, :bar_w] = (0, 0, 0)  # พื้นดำทึบ
+        new_canvas[bar_h:bar_h + H, :W] = overlay
+        overlay = new_canvas
+
+        # เขียนข้อความสรุป
+        for i, line in enumerate(legend_lines):
+            y = pad_y + (i + 1) * line_h - 6
+            cv2.putText(overlay, line, (pad_x, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.8, (255, 255, 255), 3, cv2.LINE_AA)
+
+    # บันทึกไฟล์
+    if out_path is None:
+        out_dir = pcv.params.debug_outdir or "./processed"
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, "ALL_in_one_overlay.png")
+
     try:
         cv2.imwrite(out_path, overlay)
     except Exception:
-        # เผื่อบางระบบเขียนไฟล์ตรง ๆ ไม่ได้
         pcv.print_image(img=overlay, filename=out_path)
 
     return out_path

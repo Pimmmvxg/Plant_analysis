@@ -7,35 +7,57 @@ from . import config as cfg
 from .io_utils import safe_readimage
 from .masking import clean_mask, ensure_binary, get_initial_mask
 from .roi_top import make_grid_rois
-from .roi_side import make_side_roi
-from .analyze_top import analyze_one_top, add_global_density_and_color, save_top_overlay
-from .analyze_side import analyze_one_side
-from .calibration import get_scale_from_checkerboard
+from .roi_side import make_side_roi ,make_side_rois_auto
+from .analyze_top import analyze_one_top, add_global_density_and_color, combine_top_overlays, save_top_overlay
+from .analyze_side import analyze_one_side, get_side_legend, combine_side_overlays
+from .calibration import get_scale
+from .analyze_side import save_side_overlay
 
 _LAST_MM_PER_PX = getattr(cfg, "_LAST_MM_PER_PX", None)
 
 def run_one_image(rgb_img, filename):
     global _LAST_MM_PER_PX
-    
-    mm_per_px, found_cb, scale_info = get_scale_from_checkerboard(
-        image=rgb_img,
-        square_size_mm=getattr(cfg, "CHECKER_SQUARE_MM", 8.0),
-        pattern_size=getattr(cfg, "CHECKER_PATTERN", (4, 4)),
-        previous_scale=_LAST_MM_PER_PX,
-        fallback_scale=getattr(cfg, "FALLBACK_MM_PER_PX", 10.0 / 51.0),
-        debug_name=f"{Path(filename).stem}_checker"
-    )
-    # อัปเดตค่าใช้งานจริง
-    setattr(cfg, "MM_PER_PX", float(mm_per_px))
-    _LAST_MM_PER_PX = float(mm_per_px)
+    sample_name = Path(filename).stem
 
-    # log ลง outputs
-    pcv.outputs.add_observation(sample='default', variable='mm_per_px',
-                                trait='scale', method=scale_info, scale='mm/px',
-                                datatype=float, value=float(mm_per_px), label='mm_per_px')
-    pcv.outputs.add_observation(sample='default', variable='scale_source',
-                            trait='text', method='scale_info', scale='none',
-                            datatype=str, value=scale_info, label='scale_source')
+    # 0) คาลิเบรตสเกล 1 ครั้ง/ภาพ (จำค่าเดิมไว้เป็น previous)
+    scale, found, scale_info = get_scale(
+        image=rgb_img,
+        prefer=("rectangle", "checkerboard"),
+        previous_scale=_LAST_MM_PER_PX,
+        fallback_scale=10.0/51.0,
+        rectangle_kwargs={
+            "rect_size_mm": (48.0, 48.0),
+            "crop_top_ratio": 0.80 if cfg.VIEW == "side" else 1.0,
+            "min_area": 50000,
+            "eps_fraction": 0.04,
+            "rect_tol": 0.50,
+            "min_rectangularity": 0.30,
+            "save_debug": True,
+            "debug_name": f"{sample_name}_rect_scale",
+        },
+        checker_kwargs={
+            "square_size_mm": 2.5,
+            "pattern_size": (7, 7),
+            "save_debug": True,
+            "debug_name": f"{sample_name}_checker_scale",
+        },
+    )
+
+    # 1) กระจายผลให้ทั้ง pipeline ใช้ร่วมกัน
+    setattr(cfg, "MM_PER_PX", float(scale))
+    _LAST_MM_PER_PX = float(scale)
+
+    # 2) log ลง PlantCV outputs
+    pcv.outputs.add_observation(
+        sample="default", variable="mm_per_px",
+        trait="scale", method=scale_info, scale="mm/px",
+        datatype=float, value=float(scale), label="mm_per_px"
+    )
+    pcv.outputs.add_observation(
+        sample="default", variable="scale_source",
+        trait="text", method="scale_info", scale="none",
+        datatype=str, value=scale_info, label="scale_source"
+    )
     
     # 1) initial mask (auto ถ้าไม่กำหนด, manual ถ้าตั้ง MASK_PATH/MASK_SPEC)
     mask0, info = get_initial_mask(rgb_img)
@@ -145,7 +167,8 @@ def run_one_image(rgb_img, filename):
 
         union_mask = np.zeros_like(mask_fill, dtype=np.uint8)
         slots_with_obj = 0
-
+        combined_masks = []
+        combined_labels = []
         for i, roi_cnt in enumerate(rois):
             # หา center ของ contour
             M = cv2.moments(roi_cnt)
@@ -169,11 +192,11 @@ def run_one_image(rgb_img, filename):
             # create_labels: รองรับทั้ง tuple และ single return
             try:
                 result = pcv.create_labels(mask=filtered_mask, rois=None)
-                if isinstance(result, tuple):
+                if isinstance(result, tuple) and len(result) == 2:
                     labeled_mask, n_labels = result
                 else:
                     labeled_mask = result
-                    n_labels = int(labeled_mask.max())
+                    n_labels = int(labeled_mask.max()) if labeled_mask is not None else 0
             except Exception as e:
                 _dbg("WARN: create_labels failed:", e)
                 continue
@@ -183,11 +206,8 @@ def run_one_image(rgb_img, filename):
 
             r = i // cfg.COLS + 1
             c = i %  cfg.COLS + 1
+            slot_union = np.zeros_like(filtered_mask, dtype=np.uint8)
             per_slot_count = 0
-            per_slot_area_sum = 0
-
-            r = i // cfg.COLS + 1
-            c = i %  cfg.COLS + 1
             per_slot_area_sum = 0
 
             if getattr(cfg, "MERGE_COMPONENTS_PER_SLOT", False):
@@ -216,18 +236,16 @@ def run_one_image(rgb_img, filename):
                 # ใช้ analyze_one_top บน union ทั้งหมด
                 union_mask = cv2.bitwise_or(union_mask, merged)
                 union_mask = ensure_binary(union_mask)
+                slot_union = cv2.bitwise_or(slot_union, merged)
+                slot_union = ensure_binary(slot_union)
+                
                 analyze_one_top(merged, f"slot_{r}_{c}", eff_r, rgb_img)
-                if getattr(cfg, "SAVE_TOP_OVERLAY", True):
-                    save_top_overlay(
-                        rgb_img=rgb_img,
-                        slot_mask=merged,
-                        contours=None,
-                        eff_r=eff_r,
-                        sample_name=f"slot_{r}_{c}",
-                        mm_per_px=getattr(cfg, "MM_PER_PX", None),
-                    )
                 slots_with_obj += 1
                 per_slot_count = 1
+                
+                if cv2.countNonZero(slot_union) > 0:
+                    combined_masks.append(slot_union.copy())
+                    combined_labels.append(f"slot_{r}_{c}")
 
             else:
                 # --- โหมดเดิม: วนราย obj ---
@@ -254,19 +272,23 @@ def run_one_image(rgb_img, filename):
 
                     union_mask = cv2.bitwise_or(union_mask, single)
                     union_mask = ensure_binary(union_mask)
+                    slot_union = cv2.bitwise_or(slot_union, single)
+                    slot_union = ensure_binary(slot_union)
+                    
                     analyze_one_top(single, f"slot_{r}_{c}_obj{j}", eff_r, rgb_img)
-                    if getattr(cfg, "SAVE_TOP_OVERLAY", True):
-                        save_top_overlay(
-                            rgb_img=rgb_img,
-                            slot_mask=single,
-                            contours=None,
-                            eff_r=eff_r,
-                            sample_name=f"slot_{r}_{c}_obj{j}",
-                            mm_per_px=getattr(cfg, "MM_PER_PX", None),
-                        )
                     per_slot_count += 1
                     slots_with_obj += 1
 
+            if getattr(cfg, "SAVE_TOP_OVERLAY", True) and cv2.countNonZero(slot_union) > 0:
+                save_top_overlay(
+                    rgb_img=rgb_img,
+                    slot_mask=slot_union,
+                    contours=None,
+                    eff_r=eff_r,
+                    sample_name=f"slot_{r}_{c}",
+                    mm_per_px=getattr(cfg, "MM_PER_PX", None),
+                    slot_label=f"slot_{r}_{c}"   # << ให้ขึ้นชื่อ slot ในแถบสรุป
+                )   
             # บันทึกจำนวน/พื้นที่รวมต่อ slot
             pcv.outputs.add_observation(
                 sample=f"slot_{r}_{c}", variable="n_plants_in_slot",
@@ -288,7 +310,17 @@ def run_one_image(rgb_img, filename):
 
         if slots_with_obj == 0:
             raise RuntimeError("No objects inside any ROI cell.")
-
+        if combined_masks:
+            base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
+            (Path(base) / "processed").mkdir(parents=True, exist_ok=True)
+            combine_top_overlays(
+                rgb_img=rgb_img,
+                slot_masks=combined_masks,
+                labels=combined_labels,
+                eff_r=eff_r,
+                mm_per_px=getattr(cfg, "MM_PER_PX", None),
+                out_path=str(Path(base) / "processed" / "ALL_in_one_overlay.png"),
+            ) 
         extra = {
             "filename": filename,
             "view": "top",
@@ -298,48 +330,114 @@ def run_one_image(rgb_img, filename):
             "n_slots_with_objects": int(slots_with_obj),
         }
         return extra, union_mask
+    
+    else:  # side
+        #crop
+        crop_img = pcv.crop(img=rgb_img, x=250, y=0, h=1800, w=3250)
+        crop_mask = pcv.crop(img=mask_fill, x=250, y=0, h=1800, w=3250)
+        # หา ROI อัตโนมัติหลายต้น + ดีบัคภาพรวม
+        rois = make_side_rois_auto(
+            rgb_img=crop_img,
+            mask_fill=crop_mask,
+            min_area_px=getattr(cfg, "MIN_PLANT_AREA", 800),
+            merge_gap_px=getattr(cfg, "SIDE_MERGE_GAP", 20),
+            debug_out_path=str((Path(getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or ".") 
+                               / "processed" / f"{Path(filename).stem}_side_rois.png"))
+        )
+        if not rois:
+            slot_mask, (x, y, w, h) = make_side_roi(
+                crop_img, crop_mask, cfg.USE_FULL_IMAGE_ROI,
+                cfg.ROI_X, cfg.ROI_Y, cfg.ROI_W, cfg.ROI_H
+            )
+            slot_mask = ensure_binary(slot_mask)
+            if cv2.countNonZero(slot_mask) > 0:
+                rois = [{"idx": 1, "bbox": (x, y, w, h), "comp_mask": slot_mask}]
 
-    else: # side
-        slot_mask, (x, y, w, h) = make_side_roi(
-        rgb_img, mask_fill, cfg.USE_FULL_IMAGE_ROI,
-        cfg.ROI_X, cfg.ROI_Y, cfg.ROI_W, cfg.ROI_H
-    )
+        if not rois:
+            raise RuntimeError("No objects detected for side view.")
 
-    # ถ้าเผลอเป็น 3-channel (H,W,3) บังคับแปลงเป็นเทา
-    if slot_mask is None:
-        raise RuntimeError("make_side_roi returned None for slot_mask.")
-    if slot_mask.ndim == 3:
-        slot_mask = cv2.cvtColor(slot_mask, cv2.COLOR_BGR2GRAY)
-
-    slot_mask = ensure_binary(slot_mask)
-
-    # DEBUG: ให้เห็น dtype, unique, shape, และจำนวนพิกเซลที่เป็น 1
-    print("DEBUG side slot_mask:", slot_mask.dtype, np.unique(slot_mask)[:5],
-          slot_mask.shape, "nz=", int(cv2.countNonZero(slot_mask)))
-
-    if cv2.countNonZero(slot_mask) == 0:
-        raise RuntimeError("No objects inside side ROI.")
+        union_mask = np.zeros_like(crop_mask, dtype=np.uint8)
+        union_masks = []
+        union_labels = []
         
-    roi_img  = rgb_img[y:y+h, x:x+w].copy()
-    roi_mask = slot_mask[y:y+h, x:x+w].copy()
-    analyze_one_side(roi_mask, "default", roi_img)
-    
-    add_global_density_and_color(roi_img, roi_mask)
-    
-    save_top_overlay(
-        rgb_img=roi_img,
-        slot_mask=roi_mask,
-        contours=None,
-        eff_r=None,                 # ไม่มีวงกลม ROI ก็ปล่อย None ได้
-        sample_name="side",         # ชื่อไฟล์จะเป็น side_top_overlay.png
-        mm_per_px=getattr(cfg, "MM_PER_PX", None),
-    )
-    extra = {
-        "filename": filename,
-        "view": "side",
-        "roi_rect": f"({x},{y},{w},{h})",
-    }
-    return extra, slot_mask
+        for r in rois:
+            x, y, w, h = r["bbox"]
+            sub_img  = crop_img[y:y+h, x:x+w].copy()
+            sub_mask = r["comp_mask"][y:y+h, x:x+w].copy()
+            if sub_mask.ndim == 3:
+                sub_mask = cv2.cvtColor(sub_mask, cv2.COLOR_BGR2GRAY)
+            sub_mask = ensure_binary(sub_mask)
+            if cv2.countNonZero(sub_mask) == 0:
+                continue
+
+            # ชื่อ sample ต่อก้อน
+            sample = f"side_{r['idx']}"
+
+            analyze_one_side(sub_mask, sample, sub_img)  # วิเคราะห์ต่อก้อน
+            add_global_density_and_color(sub_img, sub_mask)  # metric สี/ความหนาแน่น
+
+            # เซฟ overlay ต่อ object
+            try:
+                _ret = pcv.create_labels(mask=sub_mask)
+            except TypeError:
+                _ret = pcv.create_labels(bin_img=sub_mask)  # รองรับ PlantCV รุ่นเก่า
+            if isinstance(_ret, tuple):
+                labeled_mask, n_labels = _ret
+            else:
+                labeled_mask = _ret
+                n_labels = int(labeled_mask.max()) if labeled_mask is not None else 0
+                
+            #หลายobject
+            saved_any = False
+            for j in range(1, int(n_labels) + 1):
+                single = np.where(labeled_mask == j, 255, 0).astype(np.uint8)
+                if cv2.countNonZero(single) < getattr(cfg, "MIN_PLANT_AREA", 200):
+                    continue
+
+                save_side_overlay(
+                    rgb_img=sub_img,
+                    slot_mask=single,
+                    sample_name=f"{sample}_obj{j}",
+                    mm_per_px=getattr(cfg, "MM_PER_PX", None)
+                )
+                saved_any = True
+                
+                full_mask = np.zeros(crop_img.shape[:2], dtype=np.uint8)
+                full_mask[y:y+h, x:x+w] = single
+                union_masks.append(full_mask)
+                union_labels.append(f"{sample}_obj{j}")
+                
+            #แยกไม่ออกเลย
+            if not saved_any:
+                save_side_overlay(
+                    rgb_img=sub_img,
+                    slot_mask=sub_mask,      
+                    sample_name=f"{sample}_union",
+                    mm_per_px=getattr(cfg, "MM_PER_PX", None)
+                )
+                full_mask = np.zeros(crop_img.shape[:2], dtype=np.uint8)
+                full_mask[y:y+h, x:x+w] = sub_mask
+                union_masks.append(full_mask)
+                union_labels.append(f"{sample}_union")
+            # รวม union mask (สำหรับอ้างอิงรวม)
+            union_mask[y:y+h, x:x+w] = cv2.bitwise_or(union_mask[y:y+h, x:x+w], sub_mask)
+
+        if union_masks:
+            base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
+            (Path(base) / "processed").mkdir(parents=True, exist_ok=True)
+            combine_side_overlays(
+                rgb_img=crop_img,
+                masks=union_masks,
+                labels=union_labels,
+                mm_per_px=getattr(cfg, "MM_PER_PX", None),
+                out_path=str(Path(base) / "processed" / f"{Path(filename).stem}_ALL_side_overlay.png"),
+            )
+            extra = {
+                "filename": filename,
+                "view": "side",
+                "n_side_plants": int(len(rois)),
+            }
+            return extra, ensure_binary(union_mask)
     
 def process_one(path: Path, out_dir: Path):
     pcv.params.debug = cfg.DEBUG_MODE

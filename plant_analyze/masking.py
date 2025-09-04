@@ -383,6 +383,16 @@ def _mask_from_spec(rgb_img, spec: dict):
 
     elif method == "triangle":
         m = pcv.threshold.triangle(gray_img=gray, object_type=obj)
+        
+    elif method == "mean":
+        ksize = int(spec.get("ksize", 51))   # ค่าเริ่มต้น เช่น 51
+        offset = int(spec.get("offset", 0))
+        m = pcv.threshold.mean(
+            gray_img=gray,
+            ksize=ksize,
+            offset=offset,
+            object_type=obj
+        )
 
     else:
         # gaussian ต้องมี ksize
