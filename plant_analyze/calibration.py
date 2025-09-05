@@ -179,7 +179,7 @@ def get_scale_from_checkerboard(
     square_size_mm=2.5,
     pattern_size=(7, 7),
     previous_scale=None,
-    fallback_scale=10.0 / 51.0,
+    fallback_scale=10.0 / 181.0,
     refine=True,
     save_debug=True,
     debug_name="checkerboard_scale"
@@ -244,7 +244,6 @@ def get_scale(
     ตัวรวมกลยุทธ์คาลิเบรตสเกลสำหรับ pipeline:
       - ลองตามลำดับ prefer; ถ้าพบอย่างใดอย่างหนึ่งให้คืนค่านั้นเลย
       - ไม่พบทั้งหมด -> previous หรือ fallback
-
     rectangle_kwargs: dict ของพารามิเตอร์ที่จะส่งเข้า get_scale_from_rectangle(...)
     checker_kwargs:   dict ของพารามิเตอร์ที่จะส่งเข้า get_scale_from_checkerboard(...)
     """

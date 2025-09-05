@@ -17,6 +17,12 @@ while True:
         "global_color_name": "Warm Green",
         "auto_height_mm": 312.17019822282978,
         "auto_width_mm": 215.9692412850307,
+        "slot_1_1_color_name": "Warm Green",
+        "slot_1_1_slot_area_sum_mm2": 692.6410637773947,
+        "side_1_height_mm": 21.71636390686035,
+        "side_1_length_mm": 26.551648057997227,
+        "side_2_height_mm": 33.592500418424606,
+        "side_2_length_mm": 31.726250395178795,
     }
 
     client.publish("v1/devices/me/attributes", json.dumps(attributes), qos=1)

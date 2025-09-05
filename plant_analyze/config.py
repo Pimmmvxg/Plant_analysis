@@ -1,10 +1,6 @@
 from pathlib import Path
 import re
-
-#selected view for the plant analysis
-#options: "top", "side"
-#VIEW = "top"
-#VIEW = "side"
+from typing import Optional
 
 #Debug
 DEBUG_MODE = 'print'  # 'none'|'print'|'plot'
@@ -14,9 +10,10 @@ SAVE_TOP_OVERLAY = True
 SAVE_SIDE_ROIS_OVERVIEW = True  # เซฟรูปภาพรวมกรอบ ROI (#1, #2, ...)
 
 #I/O
-INPUT_PATH = Path(
-    r"R:\01-Organize\01-Management\01-Data Center\Brisk\06-AI & Machine Learning (D0340)\04-IOT_Smartfarm\picture_original_sideview_smartfarm\picture_sideview_04092025_100132.jpg",
-    )  # Single file or folder
+INPUT_PATH: Optional[Path] = None
+#INPUT_PATH = Path(rf".\input\sideview_1.png") 
+OUTPUT_DIR: Optional[Path] = None
+VIEW: Optional[str] = None  # "side" | "top" | None 
 EXTENSIONS = ['.png', '.jpg', '.jpeg']  # Supported image file extensions
 
 _SIDE_PATTERNS = [r"sideview", r"side[_\- ]?view", r"\bside\b"]
@@ -33,13 +30,40 @@ def _detect_view_from_path(p: Path) -> str:
     #ไม่พบ pattern
     return "unknown"
 
-VIEW = _detect_view_from_path(INPUT_PATH)
-if VIEW == "unknown":
-    print("Warning: Cannot detect view (top/side) from input path. Default to 'side'.")
-    VIEW = "side"
-    
-_target_name = INPUT_PATH.stem if INPUT_PATH.is_file() else INPUT_PATH.name
-OUTPUT_DIR = Path(rf".\results_{_target_name}")  # Output directory for results
+def _default_output_dir(p: Path) -> Path:
+    name = p.stem if p.is_file() else p.name
+    return Path(f"./results_{name}")
+
+def resolve_runtime(input_path: str|Path,
+                    output_dir: Optional[str|Path] = None,
+                    view: Optional[str] = None):
+    global INPUT_PATH, OUTPUT_DIR, VIEW, MASK_SPEC
+    INPUT_PATH = Path(input_path)
+    VIEW = view or _detect_view_from_path(INPUT_PATH)
+    OUTPUT_DIR = Path(output_dir) if output_dir else _default_output_dir(INPUT_PATH)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    #Mask Selection
+    #ใช้ไฟล์ Mask(binary)
+    MASK_PATH = None # เช่น r"C:\path\my_mask.png" ; ถ้า None จะไม่ใช้โหมดนี้
+    if VIEW == "side":
+        MASK_SPEC = {
+            "channel": "lab_a",        # "lab_a"|"lab_b"|"lab_l"|"hsv_h"|"hsv_s"|"hsv_v"
+            "method": "binary",        # ใช้ binary threshold ตรง ๆ
+            "threshold": 125,          # ค่า threshold ตัดต้นไม้กับพื้นหลัง
+            "object_type": "dark",     # วัตถุเข้มกว่าพื้นหลัง
+        }
+
+    elif VIEW == "top":
+        MASK_SPEC = {
+            "channel": "lab_a",        # LAB channel a
+            "method": "otsu",          # auto threshold (Otsu)
+            "object_type": "dark",     # วัตถุเข้มกว่าพื้นหลัง
+            "ksize": 2001,             # ใช้กรณี method="gaussian"
+            "offset": 5,               # ใช้กรณี method="gaussian"
+        }
+
+    else:
+        MASK_SPEC = None   # fallback → auto select
 
 #TOP
 ROWS, COLS = 2, 4
@@ -56,32 +80,6 @@ SIDE_MERGE_GAP = 12        # ระยะช่องว่างแนวนอ
 SIDE_EXPECT_N_MIN = 3
 SIDE_EXPECT_N_MAX = 20
 
-#Mask Selection
-#ใช้ไฟล์ Mask(binary)
-MASK_PATH = None # เช่น r"C:\path\my_mask.png" ; ถ้า None จะไม่ใช้โหมดนี้
-
-#กำหนดThresholdเอง
-#MASK_SPEC = None
-
-if VIEW == "side":
-    MASK_SPEC = {
-        "channel": "lab_a",        # "lab_a"|"lab_b"|"lab_l"|"hsv_h"|"hsv_s"|"hsv_v"
-        "method": "binary",        # ใช้ binary threshold ตรง ๆ
-        "threshold": 125,          # ค่า threshold ตัดต้นไม้กับพื้นหลัง
-        "object_type": "dark",     # วัตถุเข้มกว่าพื้นหลัง
-    }
-
-elif VIEW == "top":
-    MASK_SPEC = {
-        "channel": "lab_a",        # LAB channel a
-        "method": "otsu",          # auto threshold (Otsu)
-        "object_type": "dark",     # วัตถุเข้มกว่าพื้นหลัง
-        "ksize": 2001,             # ใช้กรณี method="gaussian"
-        "offset": 5,               # ใช้กรณี method="gaussian"
-    }
-
-else:
-    MASK_SPEC = None   # fallback → auto select
 #Calibretion scale
 CHECKER_SQUARE_MM = 12.0
 CHECKER_PATTERN = (3, 3)

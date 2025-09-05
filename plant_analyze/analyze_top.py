@@ -3,6 +3,7 @@ import cv2
 from plantcv import plantcv as pcv
 from .color import get_color_name
 from typing import Optional, List, Tuple
+from .config import INPUT_PATH
 
 import json
 import os
@@ -112,7 +113,6 @@ def analyze_one_top(slot_mask, sample_name, eff_r, rgb_img):
 
         # circularity ของ union
         circularity = (4.0 * np.pi * area_union / (perim_sum ** 2)) if perim_sum > 0 else 0.0
-
         
     hsv = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2HSV)
     h, s, v = cv2.split(hsv)
@@ -159,8 +159,7 @@ def save_top_overlay(
       - bounding box ของ hull (เหลือง)
       - centroid ของ union mask (แดง)
       - วงกลม ROI รัศมี eff_r (ม่วง) รอบ centroid (ถ้ามี)
-      - แถบสรุปบนสุด: '<slot_label> | Main Color | Area'
-
+      - แถบสรุปบนสุด: '<slot_label> | Main Color | Area' 
     Return: เส้นทางไฟล์ภาพที่บันทึก
     """
     import os
@@ -309,6 +308,7 @@ def combine_top_overlays(
 
     # ช่วยแปลง/วัดพื้นที่
     def _ensure_bin(m: np.ndarray) -> np.ndarray:
+    
         if m.ndim == 3:
             m = cv2.cvtColor(m, cv2.COLOR_BGR2GRAY)
         if m.dtype != np.uint8:
@@ -330,7 +330,7 @@ def combine_top_overlays(
         if cv2.countNonZero(m) == 0:
             continue
 
-        # รวมเข้ายูนิออน
+        # รวม
         union_mask = cv2.bitwise_or(union_mask, m)
 
         # คอนทัวร์สีเขียว
@@ -372,7 +372,7 @@ def combine_top_overlays(
         if cx is not None and cy is not None:
             small = f"{slot_name}"
             cv2.putText(overlay, small, (cx + 6, cy - 6),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2, cv2.LINE_AA)
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (204, 102, 0), 2, cv2.LINE_AA)
 
         # เก็บเข้ารายการ legend
         legend_lines.append(f"{slot_name} | Main Color: {color_name} | Area: {area_str}")
@@ -385,7 +385,7 @@ def combine_top_overlays(
         bar_h = pad_y * 2 + line_h * len(legend_lines)
         bar_w = max(560, int(12 + max(len(s) for s in legend_lines) * 9))
 
-        # ขยายแคนวาสด้านบนเพื่อวางแผงสรุป
+        # ขยายแคนวาสด้านบนเพื่อใส่ข้อความสรุป
         new_canvas = np.zeros((bar_h + H, max(bar_w, W), 3), dtype=np.uint8)
         new_canvas[:bar_h, :bar_w] = (0, 0, 0)  # พื้นดำทึบ
         new_canvas[bar_h:bar_h + H, :W] = overlay
@@ -397,15 +397,29 @@ def combine_top_overlays(
             cv2.putText(overlay, line, (pad_x, y),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.8, (255, 255, 255), 3, cv2.LINE_AA)
 
-    # บันทึกไฟล์
+    extra_dir = r"R:\01-Organize\01-Management\01-Data Center\Brisk\06-AI & Machine Learning (D0340)\04-IOT_Smartfarm\picture_result_topview_smartfarm"
+    os.makedirs(extra_dir, exist_ok=True)
+
+    _target_name = (INPUT_PATH.stem if INPUT_PATH.is_file() else INPUT_PATH.name)
+    extra_path = os.path.join(extra_dir, f"results_{_target_name}.png")
+
     if out_path is None:
         out_dir = pcv.params.debug_outdir or "./processed"
         os.makedirs(out_dir, exist_ok=True)
-        out_path = os.path.join(out_dir, "ALL_in_one_overlay.png")
+        out_path = os.path.join(out_dir, "all_top_overlay.png")
+    else:
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
     try:
-        cv2.imwrite(out_path, overlay)
-    except Exception:
-        pcv.print_image(img=overlay, filename=out_path)
+        ok1 = cv2.imwrite(out_path, overlay)
+        if not ok1:
+            pcv.print_image(img=overlay, filename=out_path)
+
+        ok2 = cv2.imwrite(extra_path, overlay)
+        if not ok2:
+            pcv.print_image(img=overlay, filename=extra_path)
+
+    except Exception as e:
+        print(f"Warning: Cannot write overlay image. out_path={out_path!r}, extra_path={extra_path!r}, error={e}")
 
     return out_path

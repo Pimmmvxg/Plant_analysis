@@ -65,7 +65,6 @@ def main():
 
     best = None
     best_score = -1.0
-
     target_aspect = max(RECT_W_MM, RECT_H_MM) / min(RECT_W_MM, RECT_H_MM)
 
     for c in cnts:
@@ -132,7 +131,6 @@ def main():
 
     print(f"[OK] saved -> {Path(OUT_JSON).resolve()}")
 
-    
     # 4) วาด overlay ให้ตรวจสอบ
     vis = img.copy()
     tl, tr, br, bl = best["box"].astype(int)

@@ -12,19 +12,15 @@ def make_side_roi(rgb_img, mask_fill, USE_FULL_IMAGE_ROI, ROI_X, ROI_Y, ROI_W, R
         w = max(1, min(ROI_W, W - x))
         h = max(1, min(ROI_H, H - y))
 
-
     _ = pcv.roi.rectangle(img=rgb_img, x=x, y=y, w=w, h=h) # debug only
-
 
     _fc = cv2.findContours(mask_fill.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     contours = _fc[2] if len(_fc) == 3 else _fc[0]
-
 
     def intersects(b, r):
         bx, by, bw, bh = b
         rx, ry, rw, rh = r
         return not (bx + bw <= rx or rx + rw <= bx or by + bh <= ry or ry + rh <= by)
-
 
     roi_rect = (x, y, w, h)
     kept = []
@@ -32,7 +28,6 @@ def make_side_roi(rgb_img, mask_fill, USE_FULL_IMAGE_ROI, ROI_X, ROI_Y, ROI_W, R
         b = cv2.boundingRect(cnt)
         if intersects(b, roi_rect):
             kept.append(cnt)
-
 
     out = np.zeros_like(mask_fill, dtype=np.uint8)
     if kept:

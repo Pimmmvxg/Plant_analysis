@@ -2,7 +2,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Tuple, Optional
 from pathlib import Path
+from .config import INPUT_PATH
 
+import os
 import cv2
 import numpy as np
 from plantcv import plantcv as pcv
@@ -26,7 +28,6 @@ class SideBBox:
     @property
     def height(self) -> int:
         return max(0, self.y_max - self.y_min + 1)
-
 
 # ---------------------------- Helpers ---------------------------- #
 def _bbox_from_mask(m: np.ndarray) -> SideBBox:
@@ -62,7 +63,6 @@ def _find_endpoints(skel: np.ndarray) -> np.ndarray:
     if ys.size == 0:
         return np.zeros((0, 2), dtype=int)
     return np.stack([ys, xs], axis=1)
-
 
 def _px_to_mm(px: float) -> Optional[float]:
     """Convert pixel length to millimeters using cfg.MM_PER_PX (mm per pixel).
@@ -110,7 +110,6 @@ def _draw_size_overlay(mask: np.ndarray, rgb: np.ndarray, bbox: SideBBox,
                 (bbox.x_min, y0),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                 (68, 0, 255), 2, cv2.LINE_AA)
-
     # บรรทัดสอง
     cv2.putText(vis, txt2,
                 (bbox.x_min, min(vis.shape[0] - 5, y0 + line_space)),
@@ -118,6 +117,7 @@ def _draw_size_overlay(mask: np.ndarray, rgb: np.ndarray, bbox: SideBBox,
                 (68, 0, 255), 2, cv2.LINE_AA)
     
     return vis
+
 def _draw_shape_overlay(rgb: np.ndarray,
                         shape_height_px: float, shape_length_px: float,
                         shape_height_mm: Optional[float], shape_length_mm: Optional[float]) -> np.ndarray:
@@ -219,7 +219,6 @@ def analyze_one_side(slot_mask: np.ndarray, sample_name: str, rgb_img: np.ndarra
         pcv.analyze.size(img=rgb_img, labeled_mask=labeled_mask, label=sample_name)
     except Exception:
         pass
-
     
     # ---------------- Record observations ---------------- #
     def _add(var, value, trait, method, scale, dt, label=None):
@@ -261,7 +260,6 @@ def analyze_one_side(slot_mask: np.ndarray, sample_name: str, rgb_img: np.ndarra
     except Exception:
         pass
 
-    # No return; results are written into PlantCV outputs as in the existing pipeline
 def _color_name_under_mask(rgb_img: np.ndarray, mask: np.ndarray) -> tuple[str, float]:
     """คำนวณ median hue (degree 0..360) ใต้ mask แล้วแปลงเป็นชื่อสีเดียวกับ topview"""
     if mask.ndim == 3:
@@ -270,7 +268,7 @@ def _color_name_under_mask(rgb_img: np.ndarray, mask: np.ndarray) -> tuple[str, 
     if not np.any(m):
         return "Unknown", 0.0
     hsv = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2HSV)
-    h = hsv[..., 0][m].astype(np.float32) * 2.0  # OpenCV H 0..179 → degree
+    h = hsv[..., 0][m].astype(np.float32) * 2.0 # [0..180] -> [0..360]
     hue_med = float(np.median(h)) if h.size > 0 else 0.0
     return get_color_name(hue_med), hue_med
 
@@ -285,7 +283,7 @@ def save_side_overlay(
       - ใช้ size_overlay จาก _draw_size_overlay(...) เป็นพื้น
       - วาด contour (เหลือง), convex hull (ฟ้า), centroid (แดง)
       - กล่องข้อความสรุป: "Main Color: <name> | Area: <...>"
-        * area แสดง mm² และ cm² ถ้ามี mm_per_px 
+        * area แสดง mm*mm และ cm*cm ถ้ามี mm_per_px 
     """
     slot_mask = ensure_binary(slot_mask, normalize_orientation=True)
     if slot_mask is None or cv2.countNonZero(slot_mask) == 0:
@@ -381,9 +379,7 @@ def get_side_legend(rgb_img: np.ndarray, mask: np.ndarray, label: str,
     else:
         Htxt = f"{Hpx:.1f}px"
         Ltxt = f"{Lpx:.1f}px"
-
     return f"{label}: Main Color: {color_name} | Area: {area_txt} | H: {Htxt} | L: {Ltxt}"
-
 
 def combine_side_overlays(
     rgb_img: np.ndarray,
@@ -392,10 +388,8 @@ def combine_side_overlays(
     mm_per_px: Optional[float],
     out_path: Optional[str] = None
 ) -> np.ndarray:
-    """
-    รวม overlay ทุกต้นรวมเป็นภาพเดียว
     
-    """
+    # รวม overlay ทุกต้นรวมเป็นภาพเดียว
     overlay = rgb_img.copy()
 
     for mask, label in zip(masks, labels):
@@ -459,7 +453,26 @@ def combine_side_overlays(
     else:
         out = overlay
 
-    if out_path:
-        _save_debug(out, Path(out_path).name)
-        cv2.imwrite(out_path, out)
+    if out_path is None:
+        out_dir = pcv.params.debug_outdir or "./processed"
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = str(Path(out_dir) / "side_all_overlay.png")
+    else:
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        
+    extra_dir = r"R:\01-Organize\01-Management\01-Data Center\Brisk\06-AI & Machine Learning (D0340)\04-IOT_Smartfarm\picture_result_sideview_smartfarm"
+    os.makedirs(extra_dir, exist_ok=True)
+    _target_name = (INPUT_PATH.stem if INPUT_PATH.is_file() else INPUT_PATH.name)
+    extra_path = str(Path(extra_dir) / f"results_{_target_name}.png")
+
+    try:
+        ok1 = cv2.imwrite(out_path, out)
+        if not ok1:
+            pcv.print_image(img=out, filename=out_path)
+
+        ok2 = cv2.imwrite(extra_path, out)
+        if not ok2:
+            pcv.print_image(img=out, filename=extra_path)
+    except Exception as e:
+        print(f"Warning: Cannot save side overlay. out_path={out_path!r}, extra_path={extra_path!r}, error={e}")
     return out

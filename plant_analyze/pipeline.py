@@ -12,6 +12,7 @@ from .analyze_top import analyze_one_top, add_global_density_and_color, combine_
 from .analyze_side import analyze_one_side, get_side_legend, combine_side_overlays
 from .calibration import get_scale
 from .analyze_side import save_side_overlay
+from Thingsboard.send_data import publish_data
 
 _LAST_MM_PER_PX = getattr(cfg, "_LAST_MM_PER_PX", None)
 
@@ -99,7 +100,6 @@ def run_one_image(rgb_img, filename):
         pcv.outputs.add_observation(sample='default', variable='mask_path',
                                     trait='text', method='mask_select', scale='none',
                                     datatype=str, value=info['mask_path'], label='mask_path')
-
 
     # 2) clean mask
     mask_dilated = pcv.dilate(gray_img=mask0, ksize=2, i=1)
@@ -472,4 +472,11 @@ def process_one(path: Path, out_dir: Path):
         with open(out_json, 'w', encoding='utf-8') as f:
             json.dump(flat, f, ensure_ascii=False, indent=2)
 
+        # ส่งข้อมูลขึ้น ThingsBoard
+        try:
+            publish_data(out_json)
+            print(f"Published data from {out_json} to ThingsBoard.")
+        except Exception as e:
+            print(f"Failed to publish data from {out_json} to ThingsBoard: {e}")
+    
     return str(out_json)

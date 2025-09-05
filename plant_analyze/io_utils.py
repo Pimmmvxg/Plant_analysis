@@ -36,13 +36,13 @@ def aggregate_json_to_csv(json_paths, out_csv: Path):
         return
     df = pd.DataFrame(rows)
     cols = list(df.columns)
+    
     if 'filename' in cols:
         cols.insert(0, cols.pop(cols.index('filename')))
         df = df[cols]
     out_csv.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_csv, index=False, encoding='utf-8')
     print(f"Results written to {out_csv}")
-
 
 def build_file_list(input_path: Path, extensions):
     if input_path.is_file():

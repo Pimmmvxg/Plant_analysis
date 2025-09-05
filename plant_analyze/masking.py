@@ -5,7 +5,6 @@ from plantcv import plantcv as pcv
 from pathlib import Path
 from . import config as cfg
 
-
 # ---------- Core helpers ----------
 def _per_mm_from_shape(H, W):
     """คืนขนาดภาพเป็น mm ถ้ามี MM_PER_PX กำหนด"""
@@ -125,7 +124,6 @@ def _keep_top_k_components(m: np.ndarray, k: int) -> np.ndarray:
         out[labels == lab] = 255
     return ensure_binary(out, normalize_orientation=False)
 
-
 # ---------- Public APIs ----------
 def clean_mask(m, close_ksize=3, min_obj_size=60, keep_largest=False, keep_top_k=None):
     """
@@ -156,7 +154,6 @@ def clean_mask(m, close_ksize=3, min_obj_size=60, keep_largest=False, keep_top_k
 
     # ย้ำ orientation หลัง post-process
     return ensure_binary(m, normalize_orientation=True)
-
 
 def auto_select_mask(rgb_img):
     """
