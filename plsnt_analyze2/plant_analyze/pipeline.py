@@ -9,16 +9,20 @@ from .masking import clean_mask, ensure_binary, get_initial_mask
 from .roi_top import make_grid_rois
 from .roi_side import make_side_roi ,make_side_rois_auto
 from .analyze_top import analyze_one_top, add_global_density_and_color, combine_top_overlays, save_top_overlay
-from .analyze_side import analyze_one_side, get_side_legend, combine_side_overlays, save_side_overlay
+from .analyze_side import analyze_one_side, get_side_legend, combine_side_overlays
 from .calibration import get_scale
+from .analyze_side import save_side_overlay
 from Thingsboard.send_data import publish_data
 import multiprocessing
+from functools import partial
 import threading
 import concurrent.futures
 import time
+import sys
 
 _LAST_MM_PER_PX = getattr(cfg, "_LAST_MM_PER_PX", None)
-_global_lock = threading.Lock()
+# Global lock for thread-safe operations
+_global_lock = threading.RLock()
 
 def run_one_image(rgb_img, filename):
     global _LAST_MM_PER_PX
@@ -29,9 +33,9 @@ def run_one_image(rgb_img, filename):
         image=rgb_img,
         prefer=("rectangle", "checkerboard"),
         previous_scale=_LAST_MM_PER_PX,
-        fallback_scale= cfg.FALLBACK_MM_PER_PX,
+        fallback_scale=10.0/51.0,
         rectangle_kwargs={
-            "rect_size_mm": cfg.RECT_SIZE_MM,
+            "rect_size_mm": (48.0, 48.0),
             "crop_top_ratio": 0.80 if cfg.VIEW == "side" else 1.0,
             "min_area": 50000,
             "eps_fraction": 0.04,
@@ -41,16 +45,17 @@ def run_one_image(rgb_img, filename):
             "debug_name": f"{sample_name}_rect_scale",
         },
         checker_kwargs={
-            "square_size_mm": cfg.CHECKER_SQUARE_MM,
-            "pattern_size": cfg.CHECKER_PATTERN,
+            "square_size_mm": 2.5,
+            "pattern_size": (7, 7),
             "save_debug": True,
             "debug_name": f"{sample_name}_checker_scale",
         },
     )
 
     # 1) กระจายผลให้ทั้ง pipeline ใช้ร่วมกัน
-    setattr(cfg, "MM_PER_PX", float(scale))
-    _LAST_MM_PER_PX = float(scale)
+    with _global_lock:
+        setattr(cfg, "MM_PER_PX", float(scale))
+        _LAST_MM_PER_PX = float(scale)
 
     # 2) log ลง PlantCV outputs
     pcv.outputs.add_observation(
@@ -174,9 +179,11 @@ def run_one_image(rgb_img, filename):
         combined_masks = []
         combined_labels = []
         
+        # ใช้ ThreadPoolExecutor สำหรับการวิเคราะห์แต่ละ ROI
         def process_roi(i, roi_cnt):
-            nonlocal slots_with_obj, union_mask, combined_masks, combined_labels
+            nonlocal slots_with_obj
             
+            # หา center ของ contour
             M = cv2.moments(roi_cnt)
             if M["m00"] == 0:
                 return None
@@ -219,6 +226,7 @@ def run_one_image(rgb_img, filename):
             if getattr(cfg, "MERGE_COMPONENTS_PER_SLOT", False):
                 # --- โหมดรวมก้อนทั้งหมดใน ROI ---
                 merged = np.where(labeled_mask > 0, 255, 0).astype(np.uint8)
+
                 if cv2.countNonZero(merged) < getattr(cfg, "MIN_PLANT_AREA", 200):
                     return None
 
@@ -227,34 +235,42 @@ def run_one_image(rgb_img, filename):
 
                 with _global_lock:
                     pcv.outputs.add_observation(
-                    sample=f"slot_{r}_{c}", variable="area_px",
-                    trait="area", method="countNonZero(union)", scale="px",
-                    datatype=int, value=area_px, label="area_px"
-                )
-            
+                        sample=f"slot_{r}_{c}", variable="area_px",
+                        trait="area", method="countNonZero(union)", scale="px",
+                        datatype=int, value=area_px, label="area_px"
+                    )
                 mm2 = _area_mm2_from_px(area_px)
                 if mm2 is not None:
-                    pcv.outputs.add_observation(
-                        sample=f"slot_{r}_{c}", variable="area_mm2",
-                        trait="area", method="px_to_mm2", scale="mm2",
-                        datatype=float, value=float(mm2), label="area_mm2"
-                    )
-                    
-                per_slot_count = 1
-                with _global_lock:
-                    slots_with_obj += 1
+                    with _global_lock:
+                        pcv.outputs.add_observation(
+                            sample=f"slot_{r}_{c}", variable="area_mm2",
+                            trait="area", method="px_to_mm2", scale="mm2",
+                            datatype=float, value=float(mm2), label="area_mm2"
+                        )
 
                 # ใช้ analyze_one_top บน union ทั้งหมด
-                union_mask = ensure_binary(cv2.bitwise_or(union_mask, merged))
-                slot_union = ensure_binary(cv2.bitwise_or(slot_union, merged))
-
+                with _global_lock:
+                    analyze_one_top(merged, f"slot_{r}_{c}", eff_r, rgb_img)
+                    slots_with_obj += 1
+                per_slot_count = 1
+                
+                slot_union = cv2.bitwise_or(slot_union, merged)
+                slot_union = ensure_binary(slot_union)
+                
                 if cv2.countNonZero(slot_union) > 0:
-                    combined_masks.append(slot_union.copy())
-                    combined_labels.append(f"slot_{r}_{c}")
+                    return {
+                        "slot_union": slot_union.copy(),
+                        "label": f"slot_{r}_{c}",
+                        "r": r,
+                        "c": c,
+                        "per_slot_count": per_slot_count,
+                        "per_slot_area_sum": per_slot_area_sum
+                    }
 
             else:
                 # --- โหมดเดิม: วนราย obj ---
                 per_slot_count = 0
+                results = []
                 for j in range(1, int(n_labels) + 1):
                     single = np.where(labeled_mask == j, 255, 0).astype(np.uint8)
                     if cv2.countNonZero(single) < getattr(cfg, "MIN_PLANT_AREA", 200):
@@ -262,63 +278,94 @@ def run_one_image(rgb_img, filename):
 
                     area_px = int(cv2.countNonZero(single))
                     per_slot_area_sum += area_px
-                    
-                    pcv.outputs.add_observation(
-                        sample=f"slot_{r}_{c}_obj{j}", variable="area_px",
-                        trait="area", method="countNonZero", scale="px",
-                        datatype=int, value=area_px, label="area_px"
-                    )
+                    with _global_lock:
+                        pcv.outputs.add_observation(
+                            sample=f"slot_{r}_{c}_obj{j}", variable="area_px",
+                            trait="area", method="countNonZero", scale="px",
+                            datatype=int, value=area_px, label="area_px"
+                        )
                     mm2 = _area_mm2_from_px(area_px)
                     if mm2 is not None:
-                        pcv.outputs.add_observation(
-                            sample=f"slot_{r}_{c}_obj{j}", variable="area_mm2",
-                            trait="area", method="px_to_mm2", scale="mm2",
-                            datatype=float, value=float(mm2), label="area_mm2"
-                        )
-                        
+                        with _global_lock:
+                            pcv.outputs.add_observation(
+                                sample=f"slot_{r}_{c}_obj{j}", variable="area_mm2",
+                                trait="area", method="px_to_mm2", scale="mm2",
+                                datatype=float, value=float(mm2), label="area_mm2"
+                            )
+                    
                     with _global_lock:
                         analyze_one_top(single, f"slot_{r}_{c}_obj{j}", eff_r, rgb_img)
                         slots_with_obj += 1
-                        per_slot_count += 1
+                    per_slot_count += 1
                     
-                    slot_union = ensure_binary(cv2.bitwise_or(slot_union, single))
-                    union_mask = ensure_binary(cv2.bitwise_or(union_mask, single))
+                    slot_union = cv2.bitwise_or(slot_union, single)
+                    slot_union = ensure_binary(slot_union)
+                    
+                if per_slot_count > 0:
+                    return {
+                        "slot_union": slot_union.copy(),
+                        "label": f"slot_{r}_{c}",
+                        "r": r,
+                        "c": c,
+                        "per_slot_count": per_slot_count,
+                        "per_slot_area_sum": per_slot_area_sum
+                    }
+            
+            return None
+        
+        # ใช้ ThreadPoolExecutor เพื่อประมวลผล ROIs พร้อมกัน
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(rois))) as executor:
+            futures = {executor.submit(process_roi, i, roi_cnt): i for i, roi_cnt in enumerate(rois)}
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                if result:
+                    slot_union = result["slot_union"]
+                    r = result["r"]
+                    c = result["c"]
+                    per_slot_count = result["per_slot_count"]
+                    per_slot_area_sum = result["per_slot_area_sum"]
+                    
+                    with _global_lock:
+                        # บันทึกจำนวน/พื้นที่รวมต่อ slot
+                        pcv.outputs.add_observation(
+                            sample=f"slot_{r}_{c}", variable="n_plants_in_slot",
+                            trait="count", method="roi_filter", scale="none",
+                            datatype=int, value=int(per_slot_count), label="n_plants"
+                        )
+                        pcv.outputs.add_observation(
+                            sample=f"slot_{r}_{c}", variable="slot_area_sum_px",
+                            trait="area", method="sum(label_area)" if not getattr(cfg, "MERGE_COMPONENTS_PER_SLOT", False) else "countNonZero(union)",
+                            scale="px", datatype=int, value=int(per_slot_area_sum), label="slot_area_sum_px"
+                        )
+                        mm2_slot = _area_mm2_from_px(per_slot_area_sum)
+                        if mm2_slot is not None:
+                            pcv.outputs.add_observation(
+                                sample=f"slot_{r}_{c}", variable="slot_area_sum_mm2",
+                                trait="area", method="px_to_mm2", scale="mm2",
+                                datatype=float, value=float(mm2_slot), label="slot_area_sum_mm2"
+                            )
+                    
+                    # อัปเดต union_mask สำหรับภาพรวม
+                    with _global_lock:
+                        union_mask = cv2.bitwise_or(union_mask, slot_union)
+                        union_mask = ensure_binary(union_mask)
+                    
+                    if getattr(cfg, "SAVE_TOP_OVERLAY", True) and cv2.countNonZero(slot_union) > 0:
+                        save_top_overlay(
+                            rgb_img=rgb_img,
+                            slot_mask=slot_union,
+                            contours=None,
+                            eff_r=eff_r,
+                            sample_name=f"slot_{r}_{c}",
+                            mm_per_px=getattr(cfg, "MM_PER_PX", None),
+                            slot_label=f"slot_{r}_{c}"   # << ให้ขึ้นชื่อ slot ในแถบสรุป
+                        )
+                    
+                    combined_masks.append(slot_union)
+                    combined_labels.append(f"slot_{r}_{c}")
 
-            if getattr(cfg, "SAVE_TOP_OVERLAY", True) and cv2.countNonZero(slot_union) > 0:
-                save_top_overlay(
-                    rgb_img=rgb_img,
-                    slot_mask=slot_union,
-                    contours=None,
-                    eff_r=eff_r,
-                    sample_name=f"slot_{r}_{c}",
-                    mm_per_px=getattr(cfg, "MM_PER_PX", None),
-                    slot_label=f"slot_{r}_{c}"   # << ให้ขึ้นชื่อ slot ในแถบสรุป
-                )
-            with _global_lock:   
-                # บันทึกจำนวน/พื้นที่รวมต่อ slot
-                pcv.outputs.add_observation(
-                    sample=f"slot_{r}_{c}", variable="n_plants_in_slot",
-                    trait="count", method="roi_filter", scale="none",
-                    datatype=int, value=int(per_slot_count), label="n_plants"
-                )
-                pcv.outputs.add_observation(
-                    sample=f"slot_{r}_{c}", variable="slot_area_sum_px",
-                    trait="area", method="sum(label_area)" if not getattr(cfg, "MERGE_COMPONENTS_PER_SLOT", False) else "countNonZero(union)",
-                    scale="px", datatype=int, value=int(per_slot_area_sum), label="slot_area_sum_px"
-                )
-                mm2_slot = _area_mm2_from_px(per_slot_area_sum)
-                if mm2_slot is not None:
-                    pcv.outputs.add_observation(
-                        sample=f"slot_{r}_{c}", variable="slot_area_sum_mm2",
-                        trait="area", method="px_to_mm2", scale="mm2",
-                        datatype=float, value=float(mm2_slot), label="slot_area_sum_mm2"
-                    )
-
-        for i, cnt in enumerate(rois):
-            process_roi(i, cnt)
         if slots_with_obj == 0:
             raise RuntimeError("No objects inside any ROI cell.")
-        
         if combined_masks:
             base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
             (Path(base) / "processed").mkdir(parents=True, exist_ok=True)
@@ -342,14 +389,14 @@ def run_one_image(rgb_img, filename):
     
     else:  # side
         #crop
-        crop_img = pcv.crop(img=rgb_img, x=200, y=0, h=1800, w=3200)
-        crop_mask = pcv.crop(img=mask_fill, x=200, y=0, h=1800, w=3200)
+        crop_img = pcv.crop(img=rgb_img, x=250, y=0, h=1800, w=3250)
+        crop_mask = pcv.crop(img=mask_fill, x=250, y=0, h=1800, w=3250)
         # หา ROI อัตโนมัติหลายต้น + ดีบัคภาพรวม
         rois = make_side_rois_auto(
             rgb_img=crop_img,
             mask_fill=crop_mask,
             min_area_px=getattr(cfg, "MIN_PLANT_AREA", 800),
-            merge_gap_px=getattr(cfg, "SIDE_MERGE_GAP", 200),
+            merge_gap_px=getattr(cfg, "SIDE_MERGE_GAP", 20),
             debug_out_path=str((Path(getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or ".") 
                                / "processed" / f"{Path(filename).stem}_side_rois.png"))
         )
@@ -369,6 +416,7 @@ def run_one_image(rgb_img, filename):
         union_masks = []
         union_labels = []
         
+        # ใช้ ThreadPoolExecutor สำหรับการวิเคราะห์แต่ละ ROI
         def process_side_roi(r):
             x, y, w, h = r["bbox"]
             sub_img  = crop_img[y:y+h, x:x+w].copy()
@@ -377,11 +425,11 @@ def run_one_image(rgb_img, filename):
                 sub_mask = cv2.cvtColor(sub_mask, cv2.COLOR_BGR2GRAY)
             sub_mask = ensure_binary(sub_mask)
             if cv2.countNonZero(sub_mask) == 0:
-                return
+                return None
 
             # ชื่อ sample ต่อก้อน
             sample = f"side_{r['idx']}"
-            
+
             with _global_lock:
                 analyze_one_side(sub_mask, sample, sub_img)  # วิเคราะห์ต่อก้อน
                 add_global_density_and_color(sub_img, sub_mask)  # metric สี/ความหนาแน่น
@@ -399,6 +447,7 @@ def run_one_image(rgb_img, filename):
                 
             #หลายobject
             saved_any = False
+            results = []
             for j in range(1, int(n_labels) + 1):
                 single = np.where(labeled_mask == j, 255, 0).astype(np.uint8)
                 if cv2.countNonZero(single) < getattr(cfg, "MIN_PLANT_AREA", 200):
@@ -414,8 +463,10 @@ def run_one_image(rgb_img, filename):
                 
                 full_mask = np.zeros(crop_img.shape[:2], dtype=np.uint8)
                 full_mask[y:y+h, x:x+w] = single
-                union_masks.append(full_mask)
-                union_labels.append(f"{sample}_obj{j}")
+                results.append({
+                    "mask": full_mask,
+                    "label": f"{sample}_obj{j}"
+                })
                 
             #แยกไม่ออกเลย
             if not saved_any:
@@ -425,40 +476,64 @@ def run_one_image(rgb_img, filename):
                     sample_name=f"{sample}_union",
                     mm_per_px=getattr(cfg, "MM_PER_PX", None)
                 )
-                
                 full_mask = np.zeros(crop_img.shape[:2], dtype=np.uint8)
                 full_mask[y:y+h, x:x+w] = sub_mask
-                union_masks.append(full_mask)
-                union_labels.append(f"{sample}_union")
-            # รวม union mask (สำหรับอ้างอิงรวม)
-            union_mask[y:y+h, x:x+w] = cv2.bitwise_or(union_mask[y:y+h, x:x+w], sub_mask)
-
-        for r in rois:
-            process_side_roi(r)
-        if not union_masks:
-            raise RuntimeError("Processed side ROIs but no valid masks produced.")
+                results.append({
+                    "mask": full_mask,
+                    "label": f"{sample}_union"
+                })
+            
+            # ส่งกลับผลลัพธ์
+            return {
+                "sub_mask": sub_mask,
+                "x": x,
+                "y": y,
+                "w": w,
+                "h": h,
+                "results": results
+            }
         
-        base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
-        (Path(base) / "processed").mkdir(parents=True, exist_ok=True)
-        combine_side_overlays(
-            rgb_img=crop_img,
-            masks=union_masks,
-            labels=union_labels,
-            mm_per_px=getattr(cfg, "MM_PER_PX", None),
-            out_path=str(Path(base) / "processed" / f"{Path(filename).stem}_ALL_side_overlay.png"),
-        )
-        extra = {
-            "filename": filename,
-            "view": "side",
-            "n_side_plants": int(len(rois)),
-        }
-        return extra, ensure_binary(union_mask)
+        # ใช้ ThreadPoolExecutor เพื่อประมวลผล ROIs พร้อมกัน
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(rois))) as executor:
+            futures = {executor.submit(process_side_roi, r): r for r in rois}
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                if result:
+                    x, y, w, h = result["x"], result["y"], result["w"], result["h"]
+                    sub_mask = result["sub_mask"]
+                    
+                    # อัปเดต union_mask
+                    with _global_lock:
+                        union_mask[y:y+h, x:x+w] = cv2.bitwise_or(union_mask[y:y+h, x:x+w], sub_mask)
+                    
+                    # เพิ่ม masks และ labels สำหรับ combine_side_overlays
+                    for item in result["results"]:
+                        union_masks.append(item["mask"])
+                        union_labels.append(item["label"])
+
+        if union_masks:
+            base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
+            (Path(base) / "processed").mkdir(parents=True, exist_ok=True)
+            combine_side_overlays(
+                rgb_img=crop_img,
+                masks=union_masks,
+                labels=union_labels,
+                mm_per_px=getattr(cfg, "MM_PER_PX", None),
+                out_path=str(Path(base) / "processed" / f"{Path(filename).stem}_ALL_side_overlay.png"),
+            )
+            extra = {
+                "filename": filename,
+                "view": "side",
+                "n_side_plants": int(len(rois)),
+            }
+            return extra, ensure_binary(union_mask)
     
 def process_one(path: Path, out_dir: Path):
     pcv.params.debug = cfg.DEBUG_MODE
     pcv.params.debug_outdir = str(out_dir / "debug")
     pcv.params.dpi = 150
     
+    # ใช้ local outputs เพื่อป้องกัน race condition
     with _global_lock:
         pcv.outputs.clear()
 
@@ -468,21 +543,12 @@ def process_one(path: Path, out_dir: Path):
     # Flatten PlantCV observations → dict
     with _global_lock:
         results_dict = pcv.outputs.observations.copy()
-        flat = {}
+    flat = {}
     for sample, vars_ in results_dict.items():
         for var_name, record in vars_.items():
             col = f"{sample}_{var_name}" if sample != 'default' else var_name
             flat[col] = record.get('value', None)
     flat.update(extra)
-    
-    area_values = [v for k, v in flat.items() 
-                   if isinstance(v, (int, float)) and "area_sum_mm2" in k and not str(k).startswith("default")]
-
-    if area_values:
-        avg_area = float(np.mean(area_values))
-        flat["avg_area_mm2_per_image"] = avg_area
-    else:
-        flat["avg_area_mm2_per_image"] = None
 
     # Save per-image JSON
     json_dir = out_dir / "json"
@@ -499,14 +565,34 @@ def process_one(path: Path, out_dir: Path):
         with open(out_json, 'w', encoding='utf-8') as f:
             json.dump(flat, f, ensure_ascii=False, indent=2)
 
-    # ส่งข้อมูลขึ้น ThingsBoard
-    try:
-        publish_data(out_json)
-        print(f"Published data from {out_json} to ThingsBoard.")
-    except Exception as e:
-        print(f"Failed to publish data from {out_json} to ThingsBoard: {e}")
+        # ส่งข้อมูลขึ้น ThingsBoard
+        try:
+            publish_data(out_json)
+            print(f"Published data from {out_json} to ThingsBoard.")
+        except Exception as e:
+            print(f"Failed to publish data from {out_json} to ThingsBoard: {e}")
     
     return str(out_json)
+
+# เพิ่มฟังก์ชันสำหรับ multiprocessing
+def process_batch(image_paths, out_dir):
+    # ใช้ ThreadPoolExecutor เพื่อประมวลผลรูปภาพพร้อมกัน
+    num_processes = min(multiprocessing.cpu_count(), 16)
+    
+    # สร้าง process pool
+    pool = multiprocessing.Pool(processes=num_processes)
+    
+    # เตรียมฟังก์ชัน partial สำหรับ map
+    process_func = partial(process_one, out_dir=out_dir)
+    
+    # ประมวลผลแบบ parallel
+    results = pool.map(process_func, image_paths)
+    
+    # ปิด pool และรอให้งานเสร็จ
+    pool.close()
+    pool.join()
+    
+    return results
 
 # ฟังก์ชันสำหรับประมวลผลหลายไฟล์ด้วย multiprocessing
 def process_multiple(paths, out_dir):
@@ -537,14 +623,40 @@ def process_multiple(paths, out_dir):
     num_processes = min(multiprocessing.cpu_count(), 16)
     print(f"Processing {len(image_paths)} images with {num_processes} processes...")
     
+    # แบ่งงานเป็นชุดๆ เพื่อประมวลผลพร้อมกัน
+    batch_size = max(1, len(image_paths) // num_processes)
+    batches = [image_paths[i:i+batch_size] for i in range(0, len(image_paths), batch_size)]
+    
     # ใช้ ProcessPoolExecutor เพื่อประมวลผลแต่ละชุด
     start_time = time.time()
-    results = []
-    with concurrent.futures.ProcessPoolExecutor(max_workers=num_processes) as ex:
-        futs = [ex.submit(process_one, p, out_dir) for p in image_paths]
-        for i, fut in enumerate(concurrent.futures.as_completed(futs), 1):
-            results.append(fut.result())
-            print(f"Completed {i}/{len(image_paths)}")
+    with concurrent.futures.ProcessPoolExecutor(max_workers=num_processes) as executor:
+        futures = {executor.submit(process_batch, batch, out_dir): i for i, batch in enumerate(batches)}
+        all_results = []
+        for future in concurrent.futures.as_completed(futures):
+            batch_results = future.result()
+            all_results.extend(batch_results)
+            batch_idx = futures[future]
+            print(f"Batch {batch_idx+1}/{len(batches)} completed. Total processed: {len(all_results)}/{len(image_paths)}")
+    
+    end_time = time.time()
+    print(f"All processing completed in {end_time - start_time:.2f} seconds")
+    return all_results
 
-    print(f"All processing completed in {time.time() - start_time:.2f} seconds")
-    return results
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv
+
+    if len(argv) < 3:
+        print("Usage: python -m plant_analyze.pipeline <input_path> <output_dir>")
+        return 1
+    
+    input_path = argv[1]
+    output_dir = argv[2]
+
+    results = process_multiple(input_path, output_dir)
+    print(f"Processed {len(results)} images. Results saved to {output_dir}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

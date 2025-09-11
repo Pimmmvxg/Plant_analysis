@@ -5,12 +5,8 @@ from .color import get_color_name
 from typing import Optional, List, Tuple
 from . import config as cfg
 from pathlib import Path
-
-import json
 import os
-import re
-import glob
-import math
+import json
 
 def _safe_starts(arr):
     if arr is None or len(arr) == 0:
@@ -153,18 +149,6 @@ def save_top_overlay(
     mm_per_px: float | None = None,
     slot_label: str | None = None,
 ) -> str:
-    """
-    เซฟภาพ overlay ราย slot:
-      - คอนทัวร์ทุกก้อน (เขียว)
-      - convex hull รวม (ฟ้า)
-      - bounding box ของ hull (เหลือง)
-      - centroid ของ union mask (แดง)
-      - วงกลม ROI รัศมี eff_r (ม่วง) รอบ centroid (ถ้ามี)
-      - แถบสรุปบนสุด: '<slot_label> | Main Color | Area' 
-    Return: เส้นทางไฟล์ภาพที่บันทึก
-    """
-    import os
-    import json
 
     if slot_mask is None:
         raise RuntimeError("save_top_overlay: slot_mask is None")
@@ -276,17 +260,7 @@ def combine_top_overlays(
     mm_per_px: Optional[float] = None,
     out_path: Optional[str] = None,
 ) -> Optional[str]:
-    """
-    รวม overlay ของทุกต้นให้อยู่ในภาพเดียว:
-      - วาด contour ของแต่ละต้น (เขียว)
-      - วาง label แต่ละต้นบนจุด centroid
-      - สร้าง union mask เพื่อ:
-          * หา convex hull รวม (ฟ้า)
-          * วาด bbox รวม (เหลือง)
-          * วาง centroid รวม (แดง)
-      - คำนวณ 'Main Color + Area' ของแต่ละต้น แล้วสรุปเป็นแผงข้อความด้านบน:
-          'slot name | Main Color | Area'
-    """
+
     try:
         from .color import get_color_name
     except Exception:
@@ -398,7 +372,7 @@ def combine_top_overlays(
             cv2.putText(overlay, line, (pad_x, y),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.8, (255, 255, 255), 3, cv2.LINE_AA)
         
-    extra_dir = r"R:\01-Organize\01-Management\01-Data Center\Brisk\06-AI & Machine Learning (D0340)\04-IOT_Smartfarm\picture_result_topview_smartfarm"
+    extra_dir = r"D:\smartfarm\picture_topview"
     os.makedirs(extra_dir, exist_ok=True)
 
     _target_name = cfg.safe_target_name(cfg.INPUT_PATH)

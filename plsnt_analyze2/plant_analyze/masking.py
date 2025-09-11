@@ -36,8 +36,7 @@ def ensure_binary(mask, normalize_orientation: bool = True):
         return m
 
     # ลองกลับด้าน แล้วเลือกด้านที่ "สมเหตุสมผล" กว่า
-    #m_inv = cv2.bitwise_not(m)
-    m_inv = m
+    m_inv = cv2.bitwise_not(m)
 
     def _score(mm: np.ndarray) -> float:
         H, W = mm.shape[:2]
@@ -82,6 +81,7 @@ def ensure_binary(mask, normalize_orientation: bool = True):
         target = float(getattr(cfg, "MASK_TARGET_COVERAGE", 0.05))
         coverage_score = (1.0 - abs(target - ratio))
 
+        
         top_touch    = np.count_nonzero(mm[0, :] > 0)
         bottom_touch = np.count_nonzero(mm[-1, :] > 0)
         left_touch   = np.count_nonzero(mm[:, 0] > 0)
@@ -287,6 +287,7 @@ def auto_select_mask(rgb_img):
             + cfg.W_COMPONENTS * comp_score
             + cfg.W_SOLIDITY * solidity
             - cfg.W_BORDER * border_penalty)
+
 
             candidates.append((score, name, m, ratio, n_comp, solidity, kind, obj_type, ksz))
         except Exception:

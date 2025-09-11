@@ -6,7 +6,7 @@ from typing import Optional
 # -------------------------
 # Debug / I/O configuration
 # -------------------------
-DEBUG_MODE = 'print'      # 'none' | 'print' | 'plot'
+DEBUG_MODE = "none"    # 'none' | 'print' | 'plot'
 THREADS = 1               # Number of threads to use for processing
 SAVE_MASK = True          # Save the mask image
 SAVE_TOP_OVERLAY = True
@@ -15,10 +15,10 @@ SAVE_SIDE_ROIS_OVERVIEW = True  # เซฟรูปภาพรวมกรอ�
 # -------------------------
 # I/O
 # -------------------------
-INPUT_PATH: Optional[Path] = None
-#INPUT_PATH: Optional[Path] = Path(r"R:\01-Organize\01-Management\01-Data Center\Brisk\06-AI & Machine Learning (D0340)\04-IOT_Smartfarm\picture_original_topview_smartfarm\picture_topview_03092025_140927.jpg")
-OUTPUT_DIR: Optional[Path] = None
-VIEW: Optional[str] = None       # "side" | "top" | None
+#INPUT_PATH: Optional[Path] = None
+INPUT_PATH: Optional[Path] = Path(r"R:\01-Organize\01-Management\01-Data Center\Brisk\06-AI & Machine Learning (D0340)\04-IOT_Smartfarm\picture_original_topview_smartfarm\picture_topview_10092025_134654.jpg")
+#OUTPUT_DIR: Optional[Path] = Path(r"D:\smartfarm\picture_topview")
+VIEW: Optional[str] = "top"       # "side" | "top" | None
 EXTENSIONS = ['.png', '.jpg', '.jpeg']  # Supported image file extensions
 
 # -------------------------
@@ -56,6 +56,7 @@ def safe_target_name(p: Optional[Path]) -> str:
         return q.stem or "input"
     # โฟลเดอร์ → ใช้ name
     return q.name or "input"
+
 
 def _default_output_dir(p: Optional[Path]) -> Path:
     if p is None:
@@ -118,7 +119,7 @@ def resolve_runtime(input_path: str | Path,
         MASK_SPEC = {
             "channel": "lab_a",
             "method": "binary",
-            "threshold": 123,
+            "threshold": 125,
             "object_type": "dark",
         }
     elif VIEW == "top":
@@ -137,7 +138,7 @@ def resolve_runtime(input_path: str | Path,
 # -------------------------------------------------
 ROWS, COLS = 2, 4
 ROI_TYPE = "partial"  # 'partial' | 'cutto' | 'largest'
-ROI_RADIUS = 300
+ROI_RADIUS = 400
 TOP_EXPECT_N_MIN = 4
 TOP_EXPECT_N_MAX = 10
 
@@ -145,19 +146,18 @@ TOP_EXPECT_N_MAX = 10
 # SIDE view parameters (rectangle ROI)
 # -------------------------------------------------
 USE_FULL_IMAGE_ROI = False
-#ROI_X, ROI_Y, ROI_W, ROI_H = 100, 100, 240, 240
-MIN_PLANT_AREA = 600
-SIDE_MERGE_GAP = 300
+# ROI_X, ROI_Y, ROI_W, ROI_H = 100, 100, 240, 240
+MIN_PLANT_AREA = 500
+SIDE_MERGE_GAP = 12
 SIDE_EXPECT_N_MIN = 3
 SIDE_EXPECT_N_MAX = 20
 
 # -------------------------------------------------
 # Calibration scale
 # -------------------------------------------------
-CHECKER_SQUARE_MM = 12.0 # Size of one square in checkerboard (mm)
-RECT_SIZE_MM = (48, 48) # (w, h) ของสี่เหลี่ยมอ้างอิงจริง (mm)
+CHECKER_SQUARE_MM = 12.0
 CHECKER_PATTERN = (3, 3)
-FALLBACK_MM_PER_PX = 48.0 /340.0
+FALLBACK_MM_PER_PX = 12.0 / 146.3
 
 # -------------------------------------------------
 # Mask scoring weights

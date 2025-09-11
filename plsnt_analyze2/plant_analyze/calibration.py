@@ -30,14 +30,14 @@ def side_lengths(box4: np.ndarray) -> tuple[float, float]:
 def scale_from_contours(
     th: np.ndarray,
     image: np.ndarray,
-    rect_size_mm=cfg.RECT_SIZE_MM, # (w, h) ของสี่เหลี่ยมอ้างอิงจริง (mm)
+    rect_size_mm=(48.0, 48.0), # (w, h) ของสี่เหลี่ยมอ้างอิงจริง (mm)
     crop_top_ratio=0.7,
     min_area=3000000,
     eps_fraction=0.04, # การลดจุดมุม ได้มุมเยอะเพิ่มค่า มุมน้อยลดค่า
     rect_tol=0.3, # ยอมให้ aspect ratio เพี้ยนจากของจริงได้
     min_rectangularity=0.6, # ความเป็นสี่เหลี่ยมขั้นต่ำ
     previous_scale=None,
-    fallback_scale=cfg.FALLBACK_MM_PER_PX,
+    fallback_scale=10.0 /150.0,
     save_debug=True,
     debug_name="rectangle_scale"
 ):
@@ -111,14 +111,14 @@ def scale_from_contours(
 
 def get_scale_from_rectangle(
     image,
-    rect_size_mm=cfg.RECT_SIZE_MM, # (w, h) ของสี่เหลี่ยมอ้างอิงจริง (mm)
+    rect_size_mm=(48.0, 48.0), # (w, h) ของสี่เหลี่ยมอ้างอิงจริง (mm)
     crop_top_ratio=0.7,
     min_area=3000000,
     eps_fraction=0.04, # การลดจุดมุม ได้มุมเยอะเพิ่มค่า มุมน้อยลดค่า
     rect_tol=0.3, # ยอมให้ aspect ratio เพี้ยนจากของจริงได้
     min_rectangularity=0.6, # ความเป็นสี่เหลี่ยมขั้นต่ำ
     previous_scale=None,
-    fallback_scale=cfg.FALLBACK_MM_PER_PX,
+    fallback_scale=10.0 /150.0,
     save_debug=True,
     debug_name="rectangle_scale"
 ):
@@ -176,10 +176,10 @@ def get_scale_from_rectangle(
 
 def get_scale_from_checkerboard(
     image,
-    square_size_mm=cfg.CHECKER_SQUARE_MM,
-    pattern_size=cfg.CHECKER_PATTERN,
+    square_size_mm=2.5,
+    pattern_size=(7, 7),
     previous_scale=None,
-    fallback_scale=cfg.FALLBACK_MM_PER_PX,
+    fallback_scale=10.0 / 181.0,
     refine=True,
     save_debug=True,
     debug_name="checkerboard_scale"
@@ -236,7 +236,7 @@ def get_scale(
     image,
     prefer=("rectangle", "checkerboard"),
     previous_scale=None,
-    fallback_scale=cfg.FALLBACK_MM_PER_PX,
+    fallback_scale=10.0/51.0,
     rectangle_kwargs=None,
     checker_kwargs=None,
 ):

@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Tuple, Optional
 from pathlib import Path
-from . import config as cfg
+from .config import INPUT_PATH
 
 import os
 import cv2

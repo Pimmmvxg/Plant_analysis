@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from . import config as cfg
-from .io_utils import build_file_list, aggregate_json_to_csv
+from .io_utils import build_file_list  
 from .pipeline import process_one
 
 def main():
@@ -39,9 +39,7 @@ def main():
             except Exception as e:
                 print(f"Error processing {f}: {e}")
 
-    out_csv = out_dir / "results.csv"
-    aggregate_json_to_csv(json_paths, out_csv)
-    print(f"Results written to {out_csv}")
+    print(f"Processed {len(json_paths)} images. JSON saved in {out_dir}/json")
 
 if __name__ == "__main__":
     main()
