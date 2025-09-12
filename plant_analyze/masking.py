@@ -4,6 +4,7 @@ import numpy as np
 from plantcv import plantcv as pcv
 from pathlib import Path
 from . import config as cfg
+from .custom_masking import auto_thresh_lab_a_otsu_guard
 
 # ---------- Core helpers ----------
 def _per_mm_from_shape(H, W):
@@ -124,7 +125,20 @@ def _keep_top_k_components(m: np.ndarray, k: int) -> np.ndarray:
         out[labels == lab] = 255
     return ensure_binary(out, normalize_orientation=False)
 
-# ---------- Public APIs ----------
+def connect_mask_holes(mask: np.ndarray,
+                       gap_x: int = 100,
+                       gap_y: int = 200,
+                       iterations: int = 1) -> np.ndarray:
+    
+    m = ensure_binary(mask, normalize_orientation=False)
+    if gap_x and gap_x > 0:
+        kx = cv2.getStructuringElement(cv2.MORPH_RECT, (2*int(gap_x)+1, 1))
+        m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, kx, iterations=iterations)
+    if gap_y and gap_y > 0:
+        ky = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 2*int(gap_y)+1))
+        m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, ky, iterations=iterations)
+    return ensure_binary(m, normalize_orientation=False)
+
 def clean_mask(m, close_ksize=3, min_obj_size=60, keep_largest=False, keep_top_k=None):
     """
     ทำความสะอาดมาสก์:
@@ -389,6 +403,12 @@ def _mask_from_spec(rgb_img, spec: dict):
             offset=offset,
             object_type=obj
         )
+        
+    elif method == "side_auto":
+        t, m_guard = auto_thresh_lab_a_otsu_guard(rgb_img,
+                                                  object_type=spec.get("object_type", "dark"),
+                                                  )
+        m = ensure_binary(m_guard, normalize_orientation=True)
 
     else:
         # gaussian ต้องมี ksize
@@ -413,6 +433,17 @@ def _mask_from_spec(rgb_img, spec: dict):
         "n_components": int(n_comp),
         "solidity": float(solidity),
     }
+    # --- Bridge + Log ที่สาขา MASK_SPEC ด้วย ---
+    if str(getattr(cfg, "VIEW", "top")).lower() == "side":
+        bx = int(getattr(cfg, "SIDE_BRIDGE_GAP_X", 100))
+        by = int(getattr(cfg, "SIDE_BRIDGE_GAP_Y", 200))
+        if bx > 0 or by > 0:
+            before_area = cv2.countNonZero(m)
+            m = connect_mask_holes(m, gap_x=bx, gap_y=by, iterations=1)
+            after_area = cv2.countNonZero(m)
+            if getattr(cfg, "DEBUG_MODE", "none") == "print":
+                print(f"[bridge-spec] VIEW=side bx={bx} by={by} area {before_area}->{after_area}")
+
     return m, info
 
 def _mask_from_file(path_str: str):
@@ -462,4 +493,12 @@ def get_initial_mask(rgb_img):
     if getattr(cfg, "FORCE_OBJECT_WHITE", False):
         if cv2.countNonZero(m) > (m.size // 2):
             m = cv2.bitwise_not(m)
+    if str(getattr(cfg, "VIEW", "top")).lower() == "side":
+        bx = int(getattr(cfg, "SIDE_BRIDGE_GAP_X", 100))
+        by = int(getattr(cfg, "SIDE_BRIDGE_GAP_Y", 200))
+        if bx > 0 or by > 0:
+            before_area = cv2.countNonZero(m)
+            m = connect_mask_holes(m, gap_x=bx, gap_y=by, iterations=1)
+            after_area = cv2.countNonZero(m)
+            print(f"[DEBUG] bridge gaps (bx={bx}, by={by}) area: {before_area} -> {after_area}")
     return m, info

@@ -32,7 +32,7 @@ def scale_from_contours(
     image: np.ndarray,
     rect_size_mm=cfg.RECT_SIZE_MM, # (w, h) ของสี่เหลี่ยมอ้างอิงจริง (mm)
     crop_top_ratio=0.7,
-    min_area=3000000,
+    min_area=300000,
     eps_fraction=0.04, # การลดจุดมุม ได้มุมเยอะเพิ่มค่า มุมน้อยลดค่า
     rect_tol=0.3, # ยอมให้ aspect ratio เพี้ยนจากของจริงได้
     min_rectangularity=0.6, # ความเป็นสี่เหลี่ยมขั้นต่ำ

@@ -115,11 +115,22 @@ def resolve_runtime(input_path: str | Path,
 
     # --- 5) ตั้ง MASK_SPEC ตาม VIEW (เมื่อไม่ได้ใช้ external mask) ---
     if VIEW == "side":
-        MASK_SPEC = {
+        '''MASK_SPEC = {
             "channel": "lab_a",
             "method": "binary",
             "threshold": 123,
             "object_type": "dark",
+        }'''
+        MASK_SPEC = {
+            "channel": "lab_a",
+            "method": "side_auto",  # ใช้ auto + guard
+            "object_type": "dark",
+            "s_min": 30,
+            "v_bg": 45,
+            "v_shadow_max": 115,
+            "green_h": (20, 95),
+            "bottom_roi_ratio": 0.60,
+            "min_cc_area": 200,
         }
     elif VIEW == "top":
         MASK_SPEC = {
@@ -132,7 +143,6 @@ def resolve_runtime(input_path: str | Path,
     else:
         MASK_SPEC = None  
 
-# -------------------------------------------------
 # TOP view parameters
 # -------------------------------------------------
 ROWS, COLS = 2, 4
@@ -147,9 +157,11 @@ TOP_EXPECT_N_MAX = 10
 USE_FULL_IMAGE_ROI = False
 #ROI_X, ROI_Y, ROI_W, ROI_H = 100, 100, 240, 240
 MIN_PLANT_AREA = 600
-SIDE_MERGE_GAP = 300
+SIDE_MERGE_GAP = 200
 SIDE_EXPECT_N_MIN = 3
 SIDE_EXPECT_N_MAX = 20
+SIDE_BRIDGE_GAP_X = 10
+SIDE_BRIDGE_GAP_Y = 15
 
 # -------------------------------------------------
 # Calibration scale

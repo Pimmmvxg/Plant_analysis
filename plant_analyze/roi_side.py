@@ -34,12 +34,34 @@ def make_side_roi(rgb_img, mask_fill, USE_FULL_IMAGE_ROI, ROI_X, ROI_Y, ROI_W, R
         cv2.drawContours(out, kept, -1, 255, thickness=cv2.FILLED)
     return out, (x, y, w, h)
 
-def make_side_rois_auto(rgb_img, mask_fill, min_area_px=800, merge_gap_px=10, debug_out_path=None):
+def make_side_rois_auto(
+        rgb_img,
+        mask_fill,
+        cfg=None,                 # <— รับ cfg เข้าเป็นออปชัน
+        min_area_px=None,
+        merge_gap_px=None,
+        debug_out_path=None
+    ):
+    # ----- Resolve ค่าจาก cfg หรือใช้ค่า fallback -----
+    if cfg is not None:
+        if min_area_px is None:
+            min_area_px = int(getattr(cfg, "MIN_PLANT_AREA", 800))
+        if merge_gap_px is None:
+            merge_gap_px = int(getattr(cfg, "SIDE_MERGE_GAP", 20))
+        close_iters = int(getattr(cfg, "SIDE_CLOSE_ITERS", 1))
+        v_overlap_min = float(getattr(cfg, "SIDE_V_OVERLAP_MIN", 0.3))
+    else:
+        min_area_px  = int(800 if min_area_px  is None else min_area_px)
+        merge_gap_px = int(20  if merge_gap_px is None else merge_gap_px)
+        close_iters  = 1
+        v_overlap_min = 0.3
+
     H, W = rgb_img.shape[:2]
     m = (mask_fill > 0).astype(np.uint8) * 255
 
+    # morphology ปรับจาก cfg ได้
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, k, iterations=1)
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, k, iterations=close_iters)
     m = pcv.fill(bin_img=m, size=int(min_area_px))
     if cv2.countNonZero(m) == 0:
         return []
@@ -54,7 +76,8 @@ def make_side_rois_auto(rgb_img, mask_fill, min_area_px=800, merge_gap_px=10, de
     if not boxes:
         return []
 
-    boxes = _merge_nearby_boxes(boxes, gap=int(merge_gap_px))
+    # ใช้ merge_gap_px (แก้บั๊กจากตัวอย่างเดิมที่อ้างชื่อ SIDE_MERGE_GAP ตรง ๆ)
+    boxes = _merge_nearby_boxes(boxes, gap=int(merge_gap_px), v_overlap_min=v_overlap_min)
     boxes.sort(key=lambda b: b[0])
 
     rois = []
@@ -72,21 +95,23 @@ def make_side_rois_auto(rgb_img, mask_fill, min_area_px=800, merge_gap_px=10, de
         cv2.imwrite(debug_out_path, dbg)
     return rois
 
-def _merge_nearby_boxes(boxes, gap=8):
-    if not boxes:
-        return boxes
+
+def _merge_nearby_boxes(boxes, gap=8, v_overlap_min=0.0):
+    """รวมกล่องที่ชิดกันในแนวแกน X และมี vertical overlap ถึงเกณฑ์"""
     boxes = sorted(boxes, key=lambda b: b[0])
     merged = [boxes[0]]
-    def v_overlap(b1, b2):
-        y1a, y1b = b1[1], b1[1]+b1[3]
-        y2a, y2b = b2[1], b2[1]+b2[3]
-        inter = max(0, min(y1b, y2b) - max(y1a, y2a))
-        return inter / float(min(b1[3], b2[3]) + 1e-6)
+
     for b in boxes[1:]:
         x,y,w,h = b
         x0,y0,w0,h0 = merged[-1]
-        horizontal_gap = x - (x0 + w0)
-        if horizontal_gap <= gap and v_overlap(merged[-1], b) >= 0.3:
+
+        # ขยายกล่องล่าสุดออกซ้าย-ขวา gap พิกเซล
+        ex = [x0-gap, y0, w0+2*gap, h0]
+
+        # ถ้ามี overlap ใดๆ (ไม่สน vertical overlap)
+        ex = [x0 - gap, y0, w0 + 2*gap, h0]  # expand horizontally by `gap`
+        intersect = not (ex[0]+ex[2] <= x or x+w <= ex[0] or ex[1]+ex[3] <= y or y+h <= ex[1])
+        if intersect:
             nx = min(x0, x); ny = min(y0, y)
             nx2 = max(x0+w0, x+w); ny2 = max(y0+h0, y+h)
             merged[-1] = [nx, ny, nx2-nx, ny2-ny]
