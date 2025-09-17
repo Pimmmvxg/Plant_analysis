@@ -76,7 +76,7 @@ def make_side_rois_auto(
     if not boxes:
         return []
 
-    # ใช้ merge_gap_px (แก้บั๊กจากตัวอย่างเดิมที่อ้างชื่อ SIDE_MERGE_GAP ตรง ๆ)
+    # ใช้ merge_gap_px (แก้จากตัวอย่างเดิมที่อ้างชื่อ SIDE_MERGE_GAP ตรง ๆ)
     boxes = _merge_nearby_boxes(boxes, gap=int(merge_gap_px), v_overlap_min=v_overlap_min)
     boxes.sort(key=lambda b: b[0])
 

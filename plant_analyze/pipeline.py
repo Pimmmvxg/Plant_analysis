@@ -16,6 +16,8 @@ import multiprocessing
 import threading
 import concurrent.futures
 import time
+from .stem_rescue import add_v_connected_to_a
+
 
 _LAST_MM_PER_PX = getattr(cfg, "_LAST_MM_PER_PX", None)
 _global_lock = threading.Lock()
@@ -146,7 +148,76 @@ def run_one_image(rgb_img, filename):
             trait='area', method='px_to_mm2', scale='mm2',
             datatype=float, value=float(mm2_total), label='plant_area_mm2'
         )
+        
+    # ========= STEM RESCUE (เฉพาะ TOP) =========
+    '''if str(getattr(cfg, "VIEW", "top")).lower() == "top" and getattr(cfg, "ENABLE_STEM_RESCUE", True):
+        # เก็บสำเนาใบก่อนกู้ (ไว้ดู debug)
+        old_leaf_mask = mask_fill.copy()
 
+        # ฟังก์ชันกู้ก้านรับ RGB → แปลงจาก BGR->RGB เพื่อความชัวร์
+        rgb_for_stem = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB)
+
+        mask_final, stem_cand, stem_flow, thr_b = rescue_stem_and_merge(
+            rgb_img=rgb_for_stem,
+            mask_leaf=mask_fill,
+            b_otsu_fallback=getattr(cfg, "RESCUE_B_OTSU_FALLBACK", 135),
+            L_min_for_stem=getattr(cfg, "RESCUE_L_MIN_FOR_STEM", 120),
+            S_min_for_stem=getattr(cfg, "RESCUE_S_MIN_FOR_STEM", 12),
+            a_white_max=getattr(cfg, "RESCUE_A_WHITE_MAX", 150),
+            hue_yellow=getattr(cfg, "RESCUE_HUE_YELLOW", (15, 45)),
+            geo_iters=getattr(cfg, "RESCUE_GEO_ITERS", 40),
+            vert_dilate_ksize=getattr(cfg, "RESCUE_VERT_DILATE_K", 9),
+            min_area_px=getattr(cfg, "RESCUE_MIN_AREA_PX", 800),
+        )
+
+        # แทนที่มาสก์รวมด้วยเวอร์ชันที่กู้ก้านแล้ว
+        mask_fill = mask_final
+
+        # บันทึกค่า threshold บน B ที่ใช้จริงเข้า outputs + พิมพ์ log debug
+        pcv.outputs.add_observation(sample='default', variable='stem_thr_b',
+                                    trait='threshold', method='Otsu-on-B/fg', scale='u8',
+                                    datatype=int, value=int(thr_b), label='stem_thr_b')
+        if getattr(cfg, "DEBUG_MODE", "none") == "print":
+            print(f"[STEM] thr_b={thr_b} geo={getattr(cfg,'RESCUE_GEO_ITERS',40)} "
+                  f"vertK={getattr(cfg,'RESCUE_VERT_DILATE_K',9)}")
+
+        # เซฟรูป debug 4 ชุด (ก่อน/ผู้สมัคร/ไหล/หลัง)
+        base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
+        dbgdir = Path(base) / "processed"
+        dbgdir.mkdir(parents=True, exist_ok=True)
+        stem_stub = Path(filename).stem
+        cv2.imwrite(str(dbgdir / f"{stem_stub}_leaf_before_stem.png"), ensure_binary(old_leaf_mask))
+        cv2.imwrite(str(dbgdir / f"{stem_stub}_leaf_after_stem.png"), ensure_binary(mask_fill))'''
+    
+    # ========= STEM RESCUE (เฉพาะ TOP) =========
+    if str(getattr(cfg, "VIEW", "top")).lower() == "top" and getattr(cfg, "ENABLE_STEM_RESCUE", True):
+        old_leaf_mask = mask_fill.copy()
+        rgb_for_stem = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB)
+
+        mask_fill, dbg = add_v_connected_to_a(
+            rgb=rgb_for_stem,
+            base_a_mask=old_leaf_mask,
+            method=getattr(cfg, "STEM_V_METHOD", "fixed"),   # "fixed"|"otsu"|"percentile"
+            v_min=getattr(cfg, "STEM_V_MIN", 190),
+            v_max=getattr(cfg, "STEM_V_MAX", 245),
+            percentile=getattr(cfg, "STEM_V_PERCENTILE", 85),
+            s_max=getattr(cfg, "STEM_S_MAX", None),          # เช่น 80 ถ้าอยากกันสีซีดทั่วไป
+            glare_v=getattr(cfg, "STEM_GLARE_V", 235),
+            glare_s=getattr(cfg, "STEM_GLARE_S", 55),
+            near_px=getattr(cfg, "STEM_NEAR_PX", 10),
+            geo_iters=getattr(cfg, "STEM_GEO_ITERS", 100),
+            open_k=getattr(cfg, "STEM_OPEN_K", 3),
+            min_area_keep=getattr(cfg, "STEM_MIN_AREA_KEEP", 300),
+        )
+
+    # (optional) เซฟ debug เร็ว ๆ
+    base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
+    dbgdir = Path(base) / "processed"; dbgdir.mkdir(parents=True, exist_ok=True)
+    stub = Path(filename).stem
+    cv2.imwrite(str(dbgdir / f"{stub}_leaf_before_stem.png"), ensure_binary(old_leaf_mask))
+    cv2.imwrite(str(dbgdir / f"{stub}_leaf_after_stem.png"),  ensure_binary(mask_fill))
+    cv2.imwrite(str(dbgdir / f"{stub}_vmask.png"), dbg["vmask"])
+    cv2.imwrite(str(dbgdir / f"{stub}_v_connected.png"), dbg["v_connected"])
     #Top view
     if cfg.VIEW == "top":
         _dbg("DEBUG entering TOP pipeline")

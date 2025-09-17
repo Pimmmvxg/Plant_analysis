@@ -120,7 +120,8 @@ def resolve_runtime(input_path: str | Path,
             "method": "binary",
             "threshold": 123,
             "object_type": "dark",
-        }'''
+        }
+        '''
         MASK_SPEC = {
             "channel": "lab_a",
             "method": "side_auto",  # ใช้ auto + guard
@@ -131,7 +132,7 @@ def resolve_runtime(input_path: str | Path,
             "green_h": (20, 95),
             "bottom_roi_ratio": 0.60,
             "min_cc_area": 200,
-        }
+        } 
     elif VIEW == "top":
         MASK_SPEC = {
             "channel": "lab_a",
@@ -140,6 +141,13 @@ def resolve_runtime(input_path: str | Path,
             "ksize": 2001,  # ใช้เมื่อ method="gaussian"
             "offset": 5,    # ใช้เมื่อ method="gaussian"
         }
+        '''
+        MASK_SPEC = {
+            "channel": "hsv_v",
+            "method": "binary",
+            "threshold": "130",
+            "object_type": "light" 
+        }'''
     else:
         MASK_SPEC = None  
 
@@ -151,6 +159,18 @@ ROI_RADIUS = 300
 TOP_EXPECT_N_MIN = 4
 TOP_EXPECT_N_MAX = 10
 
+# ---------- STEM RESCUE (TOP view) ----------
+ENABLE_STEM_RESCUE        = True   # เปิด/ปิดฟีเจอร์กู้ก้าน
+RESCUE_B_OTSU_FALLBACK    = 135
+RESCUE_L_MIN_FOR_STEM     = 120
+RESCUE_S_MIN_FOR_STEM     = 12
+RESCUE_A_WHITE_MAX        = 150
+RESCUE_HUE_YELLOW         = (15, 45)   # OpenCV H: 0–179
+RESCUE_GEO_ITERS          = 40
+RESCUE_VERT_DILATE_K      = 9
+RESCUE_MIN_AREA_PX        = 800        # ปรับตามความละเอียดภาพ
+
+
 # -------------------------------------------------
 # SIDE view parameters (rectangle ROI)
 # -------------------------------------------------
@@ -160,8 +180,8 @@ MIN_PLANT_AREA = 600
 SIDE_MERGE_GAP = 200
 SIDE_EXPECT_N_MIN = 3
 SIDE_EXPECT_N_MAX = 20
-SIDE_BRIDGE_GAP_X = 10
-SIDE_BRIDGE_GAP_Y = 15
+SIDE_BRIDGE_GAP_X = 5
+SIDE_BRIDGE_GAP_Y = 30
 
 # -------------------------------------------------
 # Calibration scale

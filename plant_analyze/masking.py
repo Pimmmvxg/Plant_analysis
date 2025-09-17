@@ -139,6 +139,49 @@ def connect_mask_holes(mask: np.ndarray,
         m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, ky, iterations=iterations)
     return ensure_binary(m, normalize_orientation=False)
 
+def prune_cross_bridge(m_before, m_after,
+                       max_added_area=1500,
+                       max_bridge_thickness=20):
+    before = (m_before > 0).astype(np.uint8)
+    after  = (m_after  > 0).astype(np.uint8)
+    added  = ((after == 1) & (before == 0)).astype(np.uint8)
+
+    # label ของมาสก์เดิม
+    _, lbl_before = cv2.connectedComponents(before)
+
+    # label ของส่วนที่เพิ่ม
+    n_add, lbl_add = cv2.connectedComponents(added)
+    keep = np.zeros_like(added, np.uint8)
+    k3 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+
+    for i in range(1, n_add):
+        blob = (lbl_add == i).astype(np.uint8)
+        area = int(cv2.countNonZero(blob))
+        if area == 0 or area > int(max_added_area):
+            continue  # ก้อนที่เพิ่มใหญ่ผิดปกติ มักเป็น over-merge
+
+        # ขยายขอบเล็กน้อยเพื่อเช็คว่าบล็อบไปแตะกี่คอมโพเนนต์เดิม
+        touch = cv2.dilate(blob, k3, 1)
+        touching_ids = np.unique(lbl_before[touch.astype(bool)])
+        touching_ids = touching_ids[touching_ids != 0]
+
+        # ไม่อนุญาตให้เป็นสะพานที่แตะ ≥2 คอมโพเนนต์
+        if len(touching_ids) > 1:
+            continue
+
+        # กันสะพานที่ "หนาเกินไป"
+        ys, xs = np.where(blob)
+        if xs.size:
+            w = xs.max() - xs.min() + 1
+            h = ys.max() - ys.min() + 1
+            if min(w, h) > int(max_bridge_thickness):
+                continue
+
+        keep = cv2.bitwise_or(keep, blob)
+
+    out = ((before == 1) | (keep == 1)).astype(np.uint8) * 255
+    return out
+
 def clean_mask(m, close_ksize=3, min_obj_size=60, keep_largest=False, keep_top_k=None):
     """
     ทำความสะอาดมาสก์:
