@@ -238,6 +238,9 @@ def save_top_overlay(
     cv2.rectangle(vis, (10, y0 - 22), (10 + pad_w, y0 + 8), (0, 0, 0), -1)  # พื้นดำทึบ
     cv2.putText(vis, text, (12, y0),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+    filename = Path(sample_name).stem
+    cv2.putText(vis, f"File: {filename}", (12, 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2, cv2.LINE_AA)
 
     # เตรียมที่เซฟ
     out_dir = pcv.params.debug_outdir or "./processed"
@@ -297,6 +300,12 @@ def combine_top_overlays(
 
     # เตรียมภาพ/มาสก์
     overlay = rgb_img.copy()
+    try:
+        fname = Path(cfg.INPUT_PATH).stem
+    except Exception:
+        fname = "unknown"
+    cv2.putText(overlay, f"File: {fname}", (12, 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2, cv2.LINE_AA)
     H, W = overlay.shape[:2]
     union_mask = np.zeros((H, W), dtype=np.uint8)
     all_contours_pts = []

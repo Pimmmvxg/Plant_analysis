@@ -3,40 +3,30 @@ from pathlib import Path
 import re
 from typing import Optional
 
-# -------------------------
 # Debug / I/O configuration
-# -------------------------
 DEBUG_MODE = 'print'      # 'none' | 'print' | 'plot'
 THREADS = 1               # Number of threads to use for processing
 SAVE_MASK = True          # Save the mask image
 SAVE_TOP_OVERLAY = True
 SAVE_SIDE_ROIS_OVERVIEW = True  # เซฟรูปภาพรวมกรอบ ROI (#1, #2, ...)
 
-# -------------------------
 # I/O
-# -------------------------
 INPUT_PATH: Optional[Path] = None
 #INPUT_PATH: Optional[Path] = Path(r"R:\01-Organize\01-Management\01-Data Center\Brisk\06-AI & Machine Learning (D0340)\04-IOT_Smartfarm\picture_original_topview_smartfarm\picture_topview_03092025_140927.jpg")
 OUTPUT_DIR: Optional[Path] = None
 VIEW: Optional[str] = None       # "side" | "top" | None
 EXTENSIONS = ['.png', '.jpg', '.jpeg']  # Supported image file extensions
 
-# -------------------------
 # Folder-name view patterns
-# -------------------------
 _SIDE_PATTERNS = [r"sideview", r"side[_\- ]?view", r"\bside\b"]
 _TOP_PATTERNS  = [r"topview",  r"top[_\- ]?view",  r"\btop\b"]
 
-# -------------------------
 # External Binary Mask file (optional)
-# -------------------------
 MASK_PATH: Optional[Path] = None   # เช่น r"C:\path\to\my_mask.png"
 MASK_SPEC: Optional[dict] = None
 USE_EXTERNAL_MASK: bool = False    # True เมื่อ MASK_PATH ถูกตั้งค่า
 
-# -------------------------------------------------
 # Utilities
-# -------------------------------------------------
 def _detect_view_from_path(p: Path) -> str:
     s = str(p).lower()
     for pat in _SIDE_PATTERNS:
@@ -152,10 +142,18 @@ def resolve_runtime(input_path: str | Path,
         MASK_SPEC = None  
 
 # TOP view parameters
-# -------------------------------------------------
-ROWS, COLS = 2, 4
+TOP_ROI_MODE = "auto" 
+TOP_SUMMARY_MODE = "per_roi"
+TOP_MIN_PLANT_AREA = 4000      
+TOP_MERGE_GAP = 0             # px; มาก = รวมง่าย
+TOP_CLOSE_ITERS = 1            # ปิดรูเล็ก ๆ ก่อนจับกล่อง
+
+STEM_CONNECT_MODE = "cc_touch"
+STEM_CC_CLOSE_K   = 3
+
+ROWS, COLS = 2, 3
 ROI_TYPE = "partial"  # 'partial' | 'cutto' | 'largest'
-ROI_RADIUS = 300
+ROI_RADIUS = 400
 TOP_EXPECT_N_MIN = 4
 TOP_EXPECT_N_MAX = 10
 
@@ -173,7 +171,6 @@ RESCUE_MIN_AREA_PX        = 800        # ปรับตามความละ
 
 # -------------------------------------------------
 # SIDE view parameters (rectangle ROI)
-# -------------------------------------------------
 USE_FULL_IMAGE_ROI = False
 #ROI_X, ROI_Y, ROI_W, ROI_H = 100, 100, 240, 240
 MIN_PLANT_AREA = 600
@@ -185,7 +182,6 @@ SIDE_BRIDGE_GAP_Y = 30
 
 # -------------------------------------------------
 # Calibration scale
-# -------------------------------------------------
 CHECKER_SQUARE_MM = 12.0 # Size of one square in checkerboard (mm)
 RECT_SIZE_MM = (48, 48) # (w, h) ของสี่เหลี่ยมอ้างอิงจริง (mm)
 CHECKER_PATTERN = (3, 3)
@@ -193,7 +189,6 @@ FALLBACK_MM_PER_PX = 48.0 /340.0
 
 # -------------------------------------------------
 # Mask scoring weights
-# -------------------------------------------------
 W_COVERAGE   = 1.0
 W_COMPONENTS = 1.2
 W_SOLIDITY   = 0.5

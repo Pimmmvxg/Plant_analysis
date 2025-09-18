@@ -18,7 +18,6 @@ import concurrent.futures
 import time
 from .stem_rescue import add_v_connected_to_a
 
-
 _LAST_MM_PER_PX = getattr(cfg, "_LAST_MM_PER_PX", None)
 _global_lock = threading.Lock()
 
@@ -119,8 +118,8 @@ def run_one_image(rgb_img, filename):
     _dbg = lambda *a: (print(*a) if getattr(cfg, "DEBUG_MODE", "none") == "print" else None)
     _dbg("DEBUG mask_closed:", mask_closed.dtype, np.unique(mask_closed)[:5])
 
-    mask_fill = pcv.fill(bin_img=mask_closed, size=30)
-    mask_fill = clean_mask(mask_fill, close_ksize=5, min_obj_size=30)
+    mask_fill = pcv.fill(bin_img=mask_closed, size=300)
+    mask_fill = clean_mask(mask_fill, close_ksize=5, min_obj_size=7000)
     mask_fill = ensure_binary(mask_fill)
     _dbg("DEBUG mask_fill:", mask_fill.dtype, np.unique(mask_fill)[:5])
 
@@ -148,46 +147,6 @@ def run_one_image(rgb_img, filename):
             trait='area', method='px_to_mm2', scale='mm2',
             datatype=float, value=float(mm2_total), label='plant_area_mm2'
         )
-        
-    # ========= STEM RESCUE (เฉพาะ TOP) =========
-    '''if str(getattr(cfg, "VIEW", "top")).lower() == "top" and getattr(cfg, "ENABLE_STEM_RESCUE", True):
-        # เก็บสำเนาใบก่อนกู้ (ไว้ดู debug)
-        old_leaf_mask = mask_fill.copy()
-
-        # ฟังก์ชันกู้ก้านรับ RGB → แปลงจาก BGR->RGB เพื่อความชัวร์
-        rgb_for_stem = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB)
-
-        mask_final, stem_cand, stem_flow, thr_b = rescue_stem_and_merge(
-            rgb_img=rgb_for_stem,
-            mask_leaf=mask_fill,
-            b_otsu_fallback=getattr(cfg, "RESCUE_B_OTSU_FALLBACK", 135),
-            L_min_for_stem=getattr(cfg, "RESCUE_L_MIN_FOR_STEM", 120),
-            S_min_for_stem=getattr(cfg, "RESCUE_S_MIN_FOR_STEM", 12),
-            a_white_max=getattr(cfg, "RESCUE_A_WHITE_MAX", 150),
-            hue_yellow=getattr(cfg, "RESCUE_HUE_YELLOW", (15, 45)),
-            geo_iters=getattr(cfg, "RESCUE_GEO_ITERS", 40),
-            vert_dilate_ksize=getattr(cfg, "RESCUE_VERT_DILATE_K", 9),
-            min_area_px=getattr(cfg, "RESCUE_MIN_AREA_PX", 800),
-        )
-
-        # แทนที่มาสก์รวมด้วยเวอร์ชันที่กู้ก้านแล้ว
-        mask_fill = mask_final
-
-        # บันทึกค่า threshold บน B ที่ใช้จริงเข้า outputs + พิมพ์ log debug
-        pcv.outputs.add_observation(sample='default', variable='stem_thr_b',
-                                    trait='threshold', method='Otsu-on-B/fg', scale='u8',
-                                    datatype=int, value=int(thr_b), label='stem_thr_b')
-        if getattr(cfg, "DEBUG_MODE", "none") == "print":
-            print(f"[STEM] thr_b={thr_b} geo={getattr(cfg,'RESCUE_GEO_ITERS',40)} "
-                  f"vertK={getattr(cfg,'RESCUE_VERT_DILATE_K',9)}")
-
-        # เซฟรูป debug 4 ชุด (ก่อน/ผู้สมัคร/ไหล/หลัง)
-        base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
-        dbgdir = Path(base) / "processed"
-        dbgdir.mkdir(parents=True, exist_ok=True)
-        stem_stub = Path(filename).stem
-        cv2.imwrite(str(dbgdir / f"{stem_stub}_leaf_before_stem.png"), ensure_binary(old_leaf_mask))
-        cv2.imwrite(str(dbgdir / f"{stem_stub}_leaf_after_stem.png"), ensure_binary(mask_fill))'''
     
     # ========= STEM RESCUE (เฉพาะ TOP) =========
     if str(getattr(cfg, "VIEW", "top")).lower() == "top" and getattr(cfg, "ENABLE_STEM_RESCUE", True):
@@ -201,26 +160,226 @@ def run_one_image(rgb_img, filename):
             v_min=getattr(cfg, "STEM_V_MIN", 190),
             v_max=getattr(cfg, "STEM_V_MAX", 245),
             percentile=getattr(cfg, "STEM_V_PERCENTILE", 85),
-            s_max=getattr(cfg, "STEM_S_MAX", None),          # เช่น 80 ถ้าอยากกันสีซีดทั่วไป
+            s_max=getattr(cfg, "STEM_S_MAX", None),         
             glare_v=getattr(cfg, "STEM_GLARE_V", 235),
             glare_s=getattr(cfg, "STEM_GLARE_S", 55),
             near_px=getattr(cfg, "STEM_NEAR_PX", 10),
             geo_iters=getattr(cfg, "STEM_GEO_ITERS", 100),
             open_k=getattr(cfg, "STEM_OPEN_K", 3),
             min_area_keep=getattr(cfg, "STEM_MIN_AREA_KEEP", 300),
+            connect_mode=getattr(cfg, "STEM_CONNECT_MODE", "geo"),
+            cc_close_k=getattr(cfg, "STEM_CC_CLOSE_K", 0),
+
         )
 
-    # (optional) เซฟ debug เร็ว ๆ
-    base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
-    dbgdir = Path(base) / "processed"; dbgdir.mkdir(parents=True, exist_ok=True)
-    stub = Path(filename).stem
-    cv2.imwrite(str(dbgdir / f"{stub}_leaf_before_stem.png"), ensure_binary(old_leaf_mask))
-    cv2.imwrite(str(dbgdir / f"{stub}_leaf_after_stem.png"),  ensure_binary(mask_fill))
-    cv2.imwrite(str(dbgdir / f"{stub}_vmask.png"), dbg["vmask"])
-    cv2.imwrite(str(dbgdir / f"{stub}_v_connected.png"), dbg["v_connected"])
+        # (optional) เซฟ debug เร็ว ๆ
+        base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
+        dbgdir = Path(base) / "processed"; dbgdir.mkdir(parents=True, exist_ok=True)
+        stub = Path(filename).stem
+        cv2.imwrite(str(dbgdir / f"{stub}_leaf_before_stem.png"), ensure_binary(old_leaf_mask))
+        cv2.imwrite(str(dbgdir / f"{stub}_leaf_after_stem.png"),  ensure_binary(mask_fill))
+        cv2.imwrite(str(dbgdir / f"{stub}_vmask.png"), dbg["vmask"])
+        cv2.imwrite(str(dbgdir / f"{stub}_v_connected.png"), dbg["v_connected"])
     #Top view
     if cfg.VIEW == "top":
         _dbg("DEBUG entering TOP pipeline")
+        if getattr(cfg, "TOP_ROI_MODE", "grid") == "auto":
+            # ---- โหมด auto (ใหม่) ----
+            from .roi_top import make_top_rois_auto
+
+            rois = make_top_rois_auto(
+                rgb_img=rgb_img,
+                mask_fill=mask_fill,
+                cfg=cfg,
+                min_area_px=getattr(cfg, "TOP_MIN_PLANT_AREA", getattr(cfg, "MIN_PLANT_AREA", 800)),
+                merge_gap_px=getattr(cfg, "TOP_MERGE_GAP", 20),
+                close_iters=getattr(cfg, "TOP_CLOSE_ITERS", 1),
+                debug_out_path=str((Path(getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or ".")
+                                    / "processed" / f"{Path(filename).stem}_top_rois_auto.png"))
+            )
+            if not rois:
+                raise RuntimeError("No objects detected for top view (auto).")
+            
+            def _roi_center(bbox):
+                x, y, w, h = bbox
+                cx = x + w * 0.5
+                cy = y + h * 0.5
+                return cx, cy
+            
+            centers = [_roi_center(r["bbox"]) for r in rois]
+            ys = [cy for (_, cy) in centers]
+            if len(ys) >= 2:
+                split_y = float(np.median(ys))
+            else:
+                split_y = float(ys[0])
+            
+            top_row = []
+            bot_row = []
+            for r in rois:
+                cx, cy = _roi_center(r["bbox"])
+                (top_row if cy <= split_y else bot_row).append((cx, cy, r))
+                
+            top_row.sort(key=lambda t: t[0])
+            bot_row.sort(key=lambda t: t[0])
+            
+            rois_sorted = [t[2] for t in top_row] + [t[2] for t in bot_row]
+            for new_idx, r in enumerate(rois_sorted, start=1):
+                r["idx"] = new_idx
+            rois = rois_sorted
+
+            # ภาพรวมทั้งภาพ (density + color) จาก mask_fill เดิม
+            add_global_density_and_color(rgb_img, mask_fill)
+
+            union_mask = np.zeros_like(mask_fill, dtype=np.uint8)
+            combined_masks = []
+            combined_labels = []
+            slots_with_obj = 0
+
+            def process_top_auto(r):
+                nonlocal slots_with_obj, union_mask, combined_masks, combined_labels
+                
+                x, y, w, h = r["bbox"]
+                sub_img  = rgb_img[y:y+h, x:x+w].copy()
+                sub_mask = r["comp_mask"][y:y+h, x:x+w].copy()
+                sub_mask = ensure_binary(sub_mask)
+                if cv2.countNonZero(sub_mask) == 0:
+                    return
+
+                sample = f"top_{r['idx']}"
+                # eff_r ชั่วคราวสำหรับฟังก์ชันที่ต้องการ radius
+                eff_r = int(max(4, round(0.45 * min(w, h))))
+
+                # วิเคราะห์ระดับ ROI
+                with _global_lock:
+                    analyze_one_top(sub_mask, sample, eff_r, sub_img)
+                    slots_with_obj += 1
+                    add_global_density_and_color(sub_img, sub_mask)
+
+                # แยกคอมโพเนนต์ภายใน ROI
+                try:
+                    _ret = pcv.create_labels(mask=sub_mask)
+                except TypeError:
+                    _ret = pcv.create_labels(bin_img=sub_mask)
+                if isinstance(_ret, tuple):
+                    labeled_mask, n_labels = _ret
+                else:
+                    labeled_mask = _ret
+                    n_labels = int(labeled_mask.max()) if labeled_mask is not None else 0
+
+                mode = getattr(cfg, "TOP_SUMMARY_MODE", "per_object")
+                if mode == "per_object":
+                    saved_any = False
+                    # รวมทุกคอมโพเนนต์ใน ROI
+                    merged = np.where(labeled_mask > 0, 255, 0).astype(np.uint8)
+                    area_px = int(cv2.countNonZero(merged))
+                    pcv.outputs.add_observation(
+                        sample=f"{sample}",
+                        variable="area_px",
+                        trait="area", method="countNonZero",
+                        scale="px", datatype=int, value=area_px, label="area_px"
+                    )
+                    mm2 = _area_mm2_from_px(area_px)
+                    if mm2 is not None:
+                        pcv.outputs.add_observation(
+                            sample=f"{sample}",
+                            variable="area_mm2",
+                            trait="area", method="px_to_mm2",
+                            scale="mm2", datatype=float, value=float(mm2), label="area_mm2"
+                        )
+                    if cv2.countNonZero(merged) >= getattr(cfg, "MIN_PLANT_AREA", 200):
+                        save_top_overlay(
+                            rgb_img=sub_img,
+                            slot_mask=merged,
+                            contours=None,
+                            eff_r=eff_r,
+                            sample_name=f"{sample}_union",
+                            mm_per_px=getattr(cfg, "MM_PER_PX", None),
+                            slot_label=f"{sample}_union"
+                        )
+                        full_mask = np.zeros(mask_fill.shape[:2], dtype=np.uint8)
+                        full_mask[y:y+h, x:x+w] = merged
+                        combined_masks.append(full_mask)
+                        combined_labels.append(f"{sample}_union")
+
+                    if not saved_any:
+                        # fallback เป็น union ทั้ง ROI
+                        save_top_overlay(
+                            rgb_img=sub_img,
+                            slot_mask=sub_mask,
+                            contours=None,
+                            eff_r=eff_r,
+                            sample_name=f"{sample}_union",
+                            mm_per_px=getattr(cfg, "MM_PER_PX", None),
+                            slot_label=f"{sample}_union"
+                        )
+                        full_mask = np.zeros(mask_fill.shape[:2], dtype=np.uint8)
+                        full_mask[y:y+h, x:x+w] = sub_mask
+                        combined_masks.append(full_mask)
+                        combined_labels.append(f"{sample}_union")
+
+                else:  # "per_roi"
+                    # log area_px + area_mm2 ต่อ ROI ---
+                    area_px = int(cv2.countNonZero(sub_mask))
+                    if area_px < getattr(cfg, "MIN_PLANT_AREA", 2000):
+                        return        
+                    pcv.outputs.add_observation(
+                        sample=f"{sample}",
+                        variable="area_px",
+                        trait="area", method="countNonZero",
+                        scale="px", datatype=int, value=area_px, label="area_px"
+                    )
+                    mm2 = _area_mm2_from_px(area_px)   # ใช้ helper ฟังก์ชันในไฟล์เดียวกัน
+                    if mm2 is not None:
+                        pcv.outputs.add_observation(
+                            sample=f"{sample}",
+                            variable="area_mm2",
+                            trait="area", method="px_to_mm2",
+                            scale="mm2", datatype=float, value=float(mm2), label="area_mm2"
+                        )
+
+                    # เซฟ overlay เป็นทั้ง ROI เหมือนเดิม
+                    save_top_overlay(
+                        rgb_img=sub_img,
+                        slot_mask=sub_mask,
+                        contours=None,
+                        eff_r=eff_r,
+                        sample_name=f"{sample}",
+                        mm_per_px=getattr(cfg, "MM_PER_PX", None),
+                        slot_label=f"{sample}"
+                    )
+                    full_mask = np.zeros(mask_fill.shape[:2], dtype=np.uint8)
+                    full_mask[y:y+h, x:x+w] = sub_mask
+                    combined_masks.append(full_mask)
+                    combined_labels.append(f"{sample}")
+
+            for r in rois:
+                process_top_auto(r)
+
+            if combined_masks:
+                base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
+                (Path(base) / "processed").mkdir(parents=True, exist_ok=True)
+                combine_top_overlays(
+                    rgb_img=rgb_img,
+                    slot_masks=combined_masks,
+                    labels=combined_labels,
+                    eff_r=None,  # ไม่จำเป็นในภาพรวม
+                    mm_per_px=getattr(cfg, "MM_PER_PX", None),
+                    out_path=str(Path(base) / "processed" / "ALL_in_one_overlay.png"),
+                )
+
+            extra = {
+                "filename": filename,
+                "view": "top",
+                "roi_mode": "auto",
+                "n_top_rois": int(len(rois)),
+            }
+            return extra, ensure_binary(union_mask)
+
+        else:
+            # ---- โหมด grid (ของเดิม) ----
+            rois, eff_r = make_grid_rois(
+                rgb_img, cfg.ROWS, cfg.COLS, getattr(cfg, "ROI_RADIUS", None)
+            )
         try:
             rois, eff_r = make_grid_rois(
                 rgb_img, cfg.ROWS, cfg.COLS, getattr(cfg, "ROI_RADIUS", None)
@@ -231,6 +390,12 @@ def run_one_image(rgb_img, filename):
 
         # (optional) เซฟ overlay
         overlay = rgb_img.copy()
+        try:
+            fname = Path(cfg.INPUT_PATH).stem
+        except Exception:
+            fname = "unknown"
+        cv2.putText(overlay, f"File: {fname}", (12, 25),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2, cv2.LINE_AA)
         for cnt in rois:
             cv2.drawContours(overlay, [cnt], -1, (0, 255, 0), 2)
         base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
@@ -363,7 +528,7 @@ def run_one_image(rgb_img, filename):
                     eff_r=eff_r,
                     sample_name=f"slot_{r}_{c}",
                     mm_per_px=getattr(cfg, "MM_PER_PX", None),
-                    slot_label=f"slot_{r}_{c}"   # << ให้ขึ้นชื่อ slot ในแถบสรุป
+                    slot_label=f"slot_{r}_{c}"   # ให้ขึ้นชื่อ slot ในแถบสรุป
                 )
             with _global_lock:   
                 # บันทึกจำนวน/พื้นที่รวมต่อ slot
@@ -413,8 +578,43 @@ def run_one_image(rgb_img, filename):
     
     else:  # side
         #crop
-        crop_img = pcv.crop(img=rgb_img, x=200, y=0, h=1800, w=3200)
-        crop_mask = pcv.crop(img=mask_fill, x=200, y=0, h=1800, w=3200)
+        crop_img = pcv.crop(img=rgb_img, x=150, y=0, h=1800, w=3600)
+        crop_mask = pcv.crop(img=mask_fill, x=150, y=0, h=1800, w=3600)
+        
+        crop_img_rgb = cv2.cvtColor(crop_img, cv2.COLOR_BGR2RGB)
+        # === STEM RESCUE (SIDE) ด้วย V-channel ก่อนแยก ROI ===
+        if getattr(cfg, "ENABLE_SIDE_STEM_RESCUE", True):
+            crop_mask_before = ensure_binary(crop_mask)
+            crop_mask, dbg_side = add_v_connected_to_a(
+                rgb=crop_img_rgb,
+                base_a_mask=crop_mask_before,
+                method=getattr(cfg, "SIDE_V_METHOD", "fixed"),   # "fixed" | "otsu" | "percentile"
+                v_min=getattr(cfg, "SIDE_V_MIN", 150),
+                v_max=getattr(cfg, "SIDE_V_MAX", 255),
+                percentile=getattr(cfg, "SIDE_V_PERCENTILE", 85),
+                s_max=getattr(cfg, "SIDE_S_MAX", None),
+                glare_v=getattr(cfg, "SIDE_GLARE_V", 255),
+                glare_s=getattr(cfg, "SIDE_GLARE_S", 0),
+                near_px=getattr(cfg, "SIDE_NEAR_PX", 30),
+                geo_iters=getattr(cfg, "SIDE_GEO_ITERS", 120),
+                open_k=getattr(cfg, "SIDE_OPEN_K", 3),
+                min_area_keep=getattr(cfg, "SIDE_MIN_AREA_KEEP", 250),
+                connect_mode=getattr(cfg, "STEM_CONNECT_MODE", "geo"),
+                cc_close_k=getattr(cfg, "STEM_CC_CLOSE_K", 0),
+            )
+            crop_mask = ensure_binary(crop_mask)
+
+            # (optional) เซฟ debug
+            base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
+            (Path(base) / "processed").mkdir(parents=True, exist_ok=True)
+            stub = Path(filename).stem
+            cv2.imwrite(str(Path(base) / "processed" / f"{stub}_sideV_before.png"), crop_mask_before)
+            cv2.imwrite(str(Path(base) / "processed" / f"{stub}_sideV_after.png"),  crop_mask)
+            if "vmask" in dbg_side:
+                cv2.imwrite(str(Path(base) / "processed" / f"{stub}_sideV_vmask.png"), dbg_side["vmask"])
+            if "v_connected" in dbg_side:
+                cv2.imwrite(str(Path(base) / "processed" / f"{stub}_sideV_vconnected.png"), dbg_side["v_connected"])
+        
         # หา ROI อัตโนมัติหลายต้น + ดีบัคภาพรวม
         rois = make_side_rois_auto(
             rgb_img=crop_img,

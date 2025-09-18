@@ -169,7 +169,7 @@ def prune_cross_bridge(m_before, m_after,
         if len(touching_ids) > 1:
             continue
 
-        # กันสะพานที่ "หนาเกินไป"
+        # กันตัวเชื่อมที่ "หนาเกินไป"
         ys, xs = np.where(blob)
         if xs.size:
             w = xs.max() - xs.min() + 1
@@ -182,7 +182,7 @@ def prune_cross_bridge(m_before, m_after,
     out = ((before == 1) | (keep == 1)).astype(np.uint8) * 255
     return out
 
-def clean_mask(m, close_ksize=3, min_obj_size=60, keep_largest=False, keep_top_k=None):
+def clean_mask(m, close_ksize=3, min_obj_size=500, keep_largest=False, keep_top_k=None):
     """
     ทำความสะอาดมาสก์:
     - ปิดรู/เชื่อมช่องว่างด้วย morphological close (ขนาด kernel = close_ksize)
@@ -329,7 +329,7 @@ def auto_select_mask(rgb_img):
             else:
                 comp_score = +0.3
 
-            # โทษชนขอบภาพ (border penalty)
+            # ลดคะแนนเมื่อชนขอบภาพ (border penalty)
             H, W = m.shape[:2]
             top_p    = np.count_nonzero(m[0,  :] > 0) / max(W, 1)
             bottom_p = np.count_nonzero(m[-1, :] > 0) / max(W, 1)
@@ -486,7 +486,6 @@ def _mask_from_spec(rgb_img, spec: dict):
             after_area = cv2.countNonZero(m)
             if getattr(cfg, "DEBUG_MODE", "none") == "print":
                 print(f"[bridge-spec] VIEW=side bx={bx} by={by} area {before_area}->{after_area}")
-
     return m, info
 
 def _mask_from_file(path_str: str):

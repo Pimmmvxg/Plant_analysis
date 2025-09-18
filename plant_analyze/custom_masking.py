@@ -13,7 +13,7 @@ def auto_thresh_lab_a_otsu_guard(
         green_h=(20, 95),        # ช่วง H ของใบเขียว (OpenCV: 0–179)
         # 4) (ทางเลือก) ใช้ ROI เฉพาะส่วนล่างของภาพ
         use_bottom_roi=True,
-        bottom_roi_ratio=0.60,   # ใช้สัดส่วนกี่ % จากล่างขึ้นบน (0.60 = ล่าง 60%)
+        bottom_roi_ratio=0.80,   # ใช้สัดส่วนกี่ % จากล่างขึ้นบน (0.60 = ล่าง 60%)
         # 5) ทำความสะอาด
         min_cc_area=200,         # ตัดชิ้นเล็ก ๆ
         open_ksize=3,

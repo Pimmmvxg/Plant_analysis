@@ -37,7 +37,7 @@ def make_side_roi(rgb_img, mask_fill, USE_FULL_IMAGE_ROI, ROI_X, ROI_Y, ROI_W, R
 def make_side_rois_auto(
         rgb_img,
         mask_fill,
-        cfg=None,                 # <— รับ cfg เข้าเป็นออปชัน
+        cfg=None,               
         min_area_px=None,
         merge_gap_px=None,
         debug_out_path=None
@@ -76,7 +76,7 @@ def make_side_rois_auto(
     if not boxes:
         return []
 
-    # ใช้ merge_gap_px (แก้จากตัวอย่างเดิมที่อ้างชื่อ SIDE_MERGE_GAP ตรง ๆ)
+    # ใช้ merge_gap_px
     boxes = _merge_nearby_boxes(boxes, gap=int(merge_gap_px), v_overlap_min=v_overlap_min)
     boxes.sort(key=lambda b: b[0])
 
@@ -96,7 +96,7 @@ def make_side_rois_auto(
     return rois
 
 
-def _merge_nearby_boxes(boxes, gap=8, v_overlap_min=0.0):
+def _merge_nearby_boxes(boxes, gap=100, v_overlap_min=0.0):
     """รวมกล่องที่ชิดกันในแนวแกน X และมี vertical overlap ถึงเกณฑ์"""
     boxes = sorted(boxes, key=lambda b: b[0])
     merged = [boxes[0]]
