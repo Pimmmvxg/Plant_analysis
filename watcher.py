@@ -21,7 +21,7 @@ def log(msg: str):
     ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     print(f"[{ts}] {msg}", flush=True)
 
-def is_stable_file(p: Path, checks: int = 2, wait_sec: float = 1.5) -> bool:
+def is_stable_file(p: Path, checks: int = 2, wait_sec: float = 1.0) -> bool:
     """ไฟล์ต้องนิ่ง (ขนาดไม่เปลี่ยน) ต่อเนื่อง 'checks' ครั้ง"""
     if not p.exists():
         return False

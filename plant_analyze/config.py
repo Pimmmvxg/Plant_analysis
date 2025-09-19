@@ -168,7 +168,6 @@ RESCUE_GEO_ITERS          = 40
 RESCUE_VERT_DILATE_K      = 9
 RESCUE_MIN_AREA_PX        = 800        # ปรับตามความละเอียดภาพ
 
-
 # -------------------------------------------------
 # SIDE view parameters (rectangle ROI)
 USE_FULL_IMAGE_ROI = False

@@ -58,9 +58,9 @@ def add_v_connected_to_a(
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (open_k, open_k))
         vmask = cv2.morphologyEx(vmask, cv2.MORPH_OPEN, k, iterations=1)
 
-    # ---------- 2) เชื่อมเฉพาะส่วนที่ "ติดกับฐานเดิม" ----------
+    # ---------- 2) เชื่อมเฉพาะส่วนที่ ติดกับฐานเดิม(lab a) ----------
     if str(connect_mode).lower() == "cc_touch":
-        # โหมดใหม่: เก็บ "ทั้งก้อน" ของ vmask ที่แตะขอบฐาน (dilate ด้วย near_px)
+        # โหมดใหม่: เก็บทั้งก้อน ของ vmask ที่แตะขอบฐาน (dilate ด้วย near_px)
         near = (base_a_mask > 0).astype(np.uint8)
         if near_px and int(near_px) > 0:
             knear = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(near_px), int(near_px)))
@@ -99,7 +99,7 @@ def add_v_connected_to_a(
             seeds = cv2.bitwise_and(seeds, mask)
             if np.array_equal(seeds, prev): break
             prev = seeds.copy()
-        v_connected = seeds  # “ทุกอันจาก V ที่เชื่อมต่อกับฐาน a”
+        v_connected = seeds  # ทุกอันจาก V ที่เชื่อมต่อกับฐาน a
 
 
     # ---------- 3) ตัดคอมโพเนนต์เล็ก ๆ ----------

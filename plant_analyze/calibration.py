@@ -241,7 +241,7 @@ def get_scale(
     checker_kwargs=None,
 ):
     """
-    ตัวรวมกลยุทธ์คาลิเบรตสเกลสำหรับ pipeline:
+    ตัวรวมวิธีคาลิเบรตสเกลสำหรับ pipeline:
       - ลองตามลำดับ prefer; ถ้าพบอย่างใดอย่างหนึ่งให้คืนค่านั้นเลย
       - ไม่พบทั้งหมด -> previous หรือ fallback
     rectangle_kwargs: dict ของพารามิเตอร์ที่จะส่งเข้า get_scale_from_rectangle(...)

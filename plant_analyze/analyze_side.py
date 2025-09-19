@@ -12,6 +12,7 @@ from plantcv import plantcv as pcv
 from . import config as cfg
 from .masking import ensure_binary
 from .color import get_color_name
+from .movefile import enqueue_copy
 
 # ---------------------------- Data class (optional) ---------------------------- #
 @dataclass
@@ -453,26 +454,31 @@ def combine_side_overlays(
     else:
         out = overlay
 
+    _target_name = cfg.safe_target_name(cfg.INPUT_PATH)
     if out_path is None:
         out_dir = pcv.params.debug_outdir or "./processed"
         os.makedirs(out_dir, exist_ok=True)
-        out_path = str(Path(out_dir) / "side_all_overlay.png")
+        out_path = str(Path(out_dir) / f"results_{_target_name}.png")
     else:
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
         
     extra_dir = r"R:\01-Organize\01-Management\01-Data Center\Brisk\06-AI & Machine Learning (D0340)\04-IOT_Smartfarm\picture_result_sideview_smartfarm"
     os.makedirs(extra_dir, exist_ok=True)
-    _target_name = cfg.safe_target_name(cfg.INPUT_PATH)
+    
     extra_path = str(Path(extra_dir) / f"results_{_target_name}.png")
 
     try:
         ok1 = cv2.imwrite(out_path, out)
         if not ok1:
             pcv.print_image(img=out, filename=out_path)
-
-        ok2 = cv2.imwrite(extra_path, out)
-        if not ok2:
-            pcv.print_image(img=out, filename=extra_path)
     except Exception as e:
-        print(f"Warning: Cannot save side overlay. out_path={out_path!r}, extra_path={extra_path!r}, error={e}")
+        print(f"Warning: Cannot save local side overlay. out_path={out_path!r}, error={e}")
+        return out
+
+    # คิวก็อปขึ้น R: แบบ background
+    try:
+        enqueue_copy(out_path, extra_path, retries=3, backoff=1.6)
+    except Exception as e:
+        print(f"[MOVE TO R:] enqueue failed: src={out_path!r}, dst={extra_path!r}, err={e}")
+
     return out

@@ -88,9 +88,9 @@ def run_one_image(rgb_img, filename):
         ('auto_method', info.get('method'), 'text', str),
         ('auto_object_type', info.get('object_type'), 'text', str),
         ('auto_ksize', str(info.get('ksize')), 'text', str),
-        ('auto_area_ratio', float(info.get('area_ratio', 0.0)), 'ratio', float),
+        #('auto_area_ratio', float(info.get('area_ratio', 0.0)), 'ratio', float),
         ('auto_n_components', int(info.get('n_components', 0)), 'count', int),
-        ('auto_solidity', float(info.get('solidity', 0.0)), 'ratio', float),
+        #('auto_solidity', float(info.get('solidity', 0.0)), 'ratio', float),
         ('auto_height_px', int(info.get('Height_shape', H)), 'length', int),
         ('auto_width_px', int(info.get('Width_shape', W)), 'length', int),
         ('auto_height_mm', height_mm, 'length', float),
@@ -169,10 +169,9 @@ def run_one_image(rgb_img, filename):
             min_area_keep=getattr(cfg, "STEM_MIN_AREA_KEEP", 300),
             connect_mode=getattr(cfg, "STEM_CONNECT_MODE", "geo"),
             cc_close_k=getattr(cfg, "STEM_CC_CLOSE_K", 0),
-
         )
 
-        # (optional) เซฟ debug เร็ว ๆ
+        # (optional) เซฟ debug
         base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
         dbgdir = Path(base) / "processed"; dbgdir.mkdir(parents=True, exist_ok=True)
         stub = Path(filename).stem
@@ -186,7 +185,6 @@ def run_one_image(rgb_img, filename):
         if getattr(cfg, "TOP_ROI_MODE", "grid") == "auto":
             # ---- โหมด auto (ใหม่) ----
             from .roi_top import make_top_rois_auto
-
             rois = make_top_rois_auto(
                 rgb_img=rgb_img,
                 mask_fill=mask_fill,
@@ -200,31 +198,41 @@ def run_one_image(rgb_img, filename):
             if not rois:
                 raise RuntimeError("No objects detected for top view (auto).")
             
-            def _roi_center(bbox):
+            # ====== ROW ORDER BY ZONES: TOP ROW FIRST, THEN BOTTOM (LEFT->RIGHT) ======
+            # กำหนดเส้นแบ่งเป็นสัดส่วนของความสูงภาพ หรือกำหนดเป็นพิกเซลก็ได้ (ตั้งค่าได้ใน config)
+            H = rgb_img.shape[0]
+            split_ratio = float(getattr(cfg, "TOP_SPLIT_Y_RATIO", 0.50))   # 0.50 = ครึ่งภาพ
+            split_y_px  = int(getattr(cfg, "TOP_SPLIT_Y_PX", split_ratio * H))
+
+            # กันกรณี ROI อยู่ใกล้เส้นแบ่งมาก ๆ ด้วย buffer (พิกเซล)
+            buffer_px = int(getattr(cfg, "TOP_ZONE_BUFFER_PX", 0))         # เช่น 10–25 ถ้าต้องการ
+
+            def _center(bbox):
                 x, y, w, h = bbox
-                cx = x + w * 0.5
-                cy = y + h * 0.5
-                return cx, cy
-            
-            centers = [_roi_center(r["bbox"]) for r in rois]
-            ys = [cy for (_, cy) in centers]
-            if len(ys) >= 2:
-                split_y = float(np.median(ys))
-            else:
-                split_y = float(ys[0])
-            
-            top_row = []
-            bot_row = []
+                return (x + w * 0.5, y + h * 0.5)
+
+            top_zone, bottom_zone = [], []
             for r in rois:
-                cx, cy = _roi_center(r["bbox"])
-                (top_row if cy <= split_y else bot_row).append((cx, cy, r))
-                
-            top_row.sort(key=lambda t: t[0])
-            bot_row.sort(key=lambda t: t[0])
-            
-            rois_sorted = [t[2] for t in top_row] + [t[2] for t in bot_row]
-            for new_idx, r in enumerate(rois_sorted, start=1):
-                r["idx"] = new_idx
+                cx, cy = _center(r["bbox"])
+                # ใช้โซนบน/ล่างตามตำแหน่ง Y ของ center
+                if cy <= (split_y_px - buffer_px):
+                    top_zone.append((cx, r))
+                elif cy >= (split_y_px + buffer_px):
+                    bottom_zone.append((cx, r))
+                else:
+                    # ถ้าอยู่ในแถบ buffer: จัดโซนจาก y ด้านบนของ bbox จะเนียนกว่า
+                    x, y, w, h = r["bbox"]
+                    (top_zone if (y + h*0.5) <= split_y_px else bottom_zone).append((cx, r))
+
+            # เรียงซ้าย->ขวาในแต่ละโซน แล้วรวม: แถวบนก่อน แถวล่างทีหลัง
+            top_zone.sort(key=lambda t: t[0])
+            bottom_zone.sort(key=lambda t: t[0])
+            rois_sorted = [t[1] for t in top_zone] + [t[1] for t in bottom_zone]
+
+            # รีเซ็ต index ให้เรียงใหม่ (ใช้ต่อในการตั้งชื่อ sample: top_1, top_2, ...)
+            for i, r in enumerate(rois_sorted, start=1):
+                r["idx"] = i
+
             rois = rois_sorted
 
             # ภาพรวมทั้งภาพ (density + color) จาก mask_fill เดิม
@@ -318,7 +326,7 @@ def run_one_image(rgb_img, filename):
                         combined_labels.append(f"{sample}_union")
 
                 else:  # "per_roi"
-                    # log area_px + area_mm2 ต่อ ROI ---
+                    # log area_px + area_mm2 ต่อ ROI
                     area_px = int(cv2.countNonZero(sub_mask))
                     if area_px < getattr(cfg, "MIN_PLANT_AREA", 2000):
                         return        
@@ -362,7 +370,7 @@ def run_one_image(rgb_img, filename):
                     rgb_img=rgb_img,
                     slot_masks=combined_masks,
                     labels=combined_labels,
-                    eff_r=None,  # ไม่จำเป็นในภาพรวม
+                    eff_r=None, 
                     mm_per_px=getattr(cfg, "MM_PER_PX", None),
                     out_path=str(Path(base) / "processed" / "ALL_in_one_overlay.png"),
                 )

@@ -2,6 +2,7 @@ import numpy as np
 import cv2
 from plantcv import plantcv as pcv
 from .color import get_color_name
+from .movefile import enqueue_copy
 from typing import Optional, List, Tuple
 from . import config as cfg
 from pathlib import Path
@@ -416,7 +417,7 @@ def combine_top_overlays(
     if out_path is None:
         out_dir = pcv.params.debug_outdir or "./processed"
         os.makedirs(out_dir, exist_ok=True)
-        out_path = os.path.join(out_dir, "all_top_overlay.png")
+        out_path = os.path.join(out_dir, f"results_{_target_name}.png")
     else:
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
@@ -424,12 +425,14 @@ def combine_top_overlays(
         ok1 = cv2.imwrite(out_path, overlay)
         if not ok1:
             pcv.print_image(img=overlay, filename=out_path)
-
-        ok2 = cv2.imwrite(extra_path, overlay)
-        if not ok2:
-            pcv.print_image(img=overlay, filename=extra_path)
-
     except Exception as e:
-        print(f"Warning: Cannot write overlay image. out_path={out_path!r}, extra_path={extra_path!r}, error={e}")
+        print(f"Warning: Cannot write local overlay image. out_path={out_path!r}, error={e}")
+        return out_path
+
+    # คิวก็อปขึ้น R: แบบ background (ไม่บล็อก pipeline)
+    try:
+        enqueue_copy(out_path, extra_path, retries=3, backoff=1.6)
+    except Exception as e:
+        print(f"[MOVE TO R:] enqueue failed: src={out_path!r}, dst={extra_path!r}, err={e}")
 
     return out_path
