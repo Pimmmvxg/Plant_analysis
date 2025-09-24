@@ -121,14 +121,14 @@ class Handler(FileSystemEventHandler):
         except Exception as e:
             log(f"  - ERROR in on_moved: {e}")
 
-    '''def on_modified(self, event: FileSystemEvent):
+    def on_modified(self, event: FileSystemEvent):
         if event.is_directory:
             return
         log(f"on_modified: {event.src_path}")
         try:
             run_pipeline(Path(event.src_path))
         except Exception as e:
-            log(f"  - ERROR in on_modified: {e}")'''
+            log(f"  - ERROR in on_modified: {e}")
 
 
 if __name__ == "__main__":

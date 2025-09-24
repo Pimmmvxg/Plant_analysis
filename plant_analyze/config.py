@@ -61,7 +61,6 @@ def _default_output_dir(p: Optional[Path]) -> Path:
             name = "input"
     except Exception:
         name = "input"
-
     return Path(f"./results_{name}")
 
 # -------------------------------------------------
@@ -158,7 +157,11 @@ TOP_EXPECT_N_MIN = 4
 TOP_EXPECT_N_MAX = 10
 
 # ---------- STEM RESCUE (TOP view) ----------
+#add v to connect top-view
 ENABLE_STEM_RESCUE        = True   # เปิด/ปิดฟีเจอร์กู้ก้าน
+STEM_V_METHOD = "fixed"            # "fixed"|"otsu"|"percentile"
+STEM_V_MIN = 100                    # มืด 50 / สว่าง 100
+STEM_V_MAX = 255
 RESCUE_B_OTSU_FALLBACK    = 135
 RESCUE_L_MIN_FOR_STEM     = 120
 RESCUE_S_MIN_FOR_STEM     = 12
@@ -167,6 +170,11 @@ RESCUE_HUE_YELLOW         = (15, 45)   # OpenCV H: 0–179
 RESCUE_GEO_ITERS          = 40
 RESCUE_VERT_DILATE_K      = 9
 RESCUE_MIN_AREA_PX        = 800        # ปรับตามความละเอียดภาพ
+
+ENABLE_SIDE_STEM_RESCUE = True    #add v to connect side-view
+SIDE_V_METHOD = "fixed"   # "fixed" | "otsu" | "percentile"
+SIDE_V_MIN = 150           # 35 = dark, 150 = light
+SIDE_V_MAX = 255
 
 # -------------------------------------------------
 # SIDE view parameters (rectangle ROI)

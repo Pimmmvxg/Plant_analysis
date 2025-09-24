@@ -119,7 +119,7 @@ def run_one_image(rgb_img, filename):
     _dbg("DEBUG mask_closed:", mask_closed.dtype, np.unique(mask_closed)[:5])
 
     mask_fill = pcv.fill(bin_img=mask_closed, size=300)
-    mask_fill = clean_mask(mask_fill, close_ksize=5, min_obj_size=7000)
+    mask_fill = clean_mask(mask_fill, close_ksize=5, min_obj_size=3000)
     mask_fill = ensure_binary(mask_fill)
     _dbg("DEBUG mask_fill:", mask_fill.dtype, np.unique(mask_fill)[:5])
 
@@ -157,7 +157,7 @@ def run_one_image(rgb_img, filename):
             rgb=rgb_for_stem,
             base_a_mask=old_leaf_mask,
             method=getattr(cfg, "STEM_V_METHOD", "fixed"),   # "fixed"|"otsu"|"percentile"
-            v_min=getattr(cfg, "STEM_V_MIN", 190),
+            v_min=getattr(cfg, "STEM_V_MIN", 40),
             v_max=getattr(cfg, "STEM_V_MAX", 245),
             percentile=getattr(cfg, "STEM_V_PERCENTILE", 85),
             s_max=getattr(cfg, "STEM_S_MAX", None),         
@@ -245,7 +245,6 @@ def run_one_image(rgb_img, filename):
 
             def process_top_auto(r):
                 nonlocal slots_with_obj, union_mask, combined_masks, combined_labels
-                
                 x, y, w, h = r["bbox"]
                 sub_img  = rgb_img[y:y+h, x:x+w].copy()
                 sub_mask = r["comp_mask"][y:y+h, x:x+w].copy()
@@ -362,7 +361,6 @@ def run_one_image(rgb_img, filename):
 
             for r in rois:
                 process_top_auto(r)
-
             if combined_masks:
                 base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
                 (Path(base) / "processed").mkdir(parents=True, exist_ok=True)
@@ -784,7 +782,6 @@ def process_one(path: Path, out_dir: Path):
         print(f"Published data from {out_json} to ThingsBoard.")
     except Exception as e:
         print(f"Failed to publish data from {out_json} to ThingsBoard: {e}")
-    
     return str(out_json)
 
 # ฟังก์ชันสำหรับประมวลผลหลายไฟล์ด้วย multiprocessing

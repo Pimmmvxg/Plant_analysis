@@ -132,7 +132,6 @@ def get_scale_from_rectangle(
     view = getattr(cfg, "VIEW", "top").lower()
     
     if view == "top":
-        
         V = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)[:,:,2]  # Value channel
         th = pcv.threshold.binary(gray_img=V, threshold=200, object_type='light')
         
@@ -188,7 +187,6 @@ def get_scale_from_checkerboard(
     คืน mm_per_px จาก checkerboard + flag ว่าพบหรือไม่ + ข้อความอธิบาย
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
     flags = cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE
     found, corners = cv2.findChessboardCorners(gray, pattern_size, flags)
 

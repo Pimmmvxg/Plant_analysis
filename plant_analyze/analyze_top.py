@@ -154,18 +154,6 @@ def save_top_overlay(
     mm_per_px: float | None = None,
     slot_label: str | None = None,
 ) -> str:
-    """
-    เซฟภาพ overlay ราย slot:
-      - คอนทัวร์ทุกก้อน (เขียว)
-      - convex hull รวม (ฟ้า)
-      - bounding box ของ hull (เหลือง)
-      - centroid ของ union mask (แดง)
-      - วงกลม ROI รัศมี eff_r (ม่วง) รอบ centroid (ถ้ามี)
-      - แถบสรุปบนสุด: '<slot_label> | Main Color | Area' 
-    Return: เส้นทางไฟล์ภาพที่บันทึก
-    """
-    import os
-    import json
 
     if slot_mask is None:
         raise RuntimeError("save_top_overlay: slot_mask is None")
@@ -319,7 +307,6 @@ def combine_top_overlays(
 
     # ช่วยแปลง/วัดพื้นที่
     def _ensure_bin(m: np.ndarray) -> np.ndarray:
-    
         if m.ndim == 3:
             m = cv2.cvtColor(m, cv2.COLOR_BGR2GRAY)
         if m.dtype != np.uint8:
@@ -340,7 +327,6 @@ def combine_top_overlays(
         m = _ensure_bin(m)
         if cv2.countNonZero(m) == 0:
             continue
-
         # รวม
         union_mask = cv2.bitwise_or(union_mask, m)
 
@@ -379,7 +365,7 @@ def combine_top_overlays(
         slot_name = (labels[i] if labels and i < len(labels) and labels[i] else f"obj{i+1}")
         area_str = _area_text(area_px)
 
-        # เขียน label สั้นๆ ข้าง centroid ของต้นนั้น
+        # เขียน label ข้าง centroid ของต้นนั้น
         if cx is not None and cy is not None:
             small = f"{slot_name}"
             cv2.putText(overlay, small, (cx + 6, cy - 6),

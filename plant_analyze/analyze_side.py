@@ -93,12 +93,10 @@ def _draw_size_overlay(mask: np.ndarray, rgb: np.ndarray, bbox: SideBBox,
     # mask outline
     cnts, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cv2.drawContours(vis, cnts, -1, (250, 20, 20), 2)
-
     # bbox + dimensions text
     cv2.rectangle(vis, (bbox.x_min, bbox.y_min), (bbox.x_max, bbox.y_max), (0, 255, 0), 2)
     x_mid = int(0.5*(bbox.x_min + bbox.x_max))
     cv2.line(vis, (x_mid, bbox.y_min), (x_mid, bbox.y_max), (0, 255, 0), 2)
-
     # Annotations
     txt1 = f"H: {height_px:.1f}px" + (f" ({height_mm:.1f} mm)" if height_mm is not None else "")
     txt2 = f"L: {length_px:.1f}px" + (f" ({length_mm:.1f} mm)" if length_mm is not None else "")
@@ -129,7 +127,6 @@ def _draw_shape_overlay(rgb: np.ndarray,
     H, W = vis.shape[:2]
     # full-frame border
     cv2.rectangle(vis, (1,1), (W-2, H-2), (255, 0, 200), 2)
-    # dimension arrows
     # vertical
     cv2.arrowedLine(vis, (W-10, 5), (W-10, H-5), (255, 0, 200), 2, tipLength=0.02)
     # horizontal
@@ -154,6 +151,8 @@ def analyze_one_side(slot_mask: np.ndarray, sample_name: str, rgb_img: np.ndarra
     mask_vis = cv2.cvtColor(slot_mask, cv2.COLOR_GRAY2BGR)
     _save_debug(mask_vis, f"{sample_name}_side_mask.png")
 
+    #Analyze Skeletonize & prune
+    '''
     # Skeletonize & prune
     skel = _skeletonize(slot_mask)
     pruned = _prune_robust(skel, slot_mask)
@@ -182,6 +181,7 @@ def analyze_one_side(slot_mask: np.ndarray, sample_name: str, rgb_img: np.ndarra
                                     trait="flag", method="skeleton_endpoints",
                                     scale="None", datatype=bool, value=False, label="has_endpoints")
     _save_debug(endpoints_vis, f"{sample_name}_side_endpoints.png")
+    '''
 
     # Size from mask bbox
     bbox = _bbox_from_mask(slot_mask)
@@ -230,7 +230,7 @@ def analyze_one_side(slot_mask: np.ndarray, sample_name: str, rgb_img: np.ndarra
     _add("height_px", height_px, "height", "bbox_y_span", "px", float)
     _add("length_px", length_px, "length", "bbox_x_span", "px", float)
     _add("area_px", area_px, "projected_area", "mask_nonzero", "px^2", int)
-    _add("n_endpoints", n_endpoints, "skeleton_endpoints", "degree==1", "count", int)
+    #_add("n_endpoints", n_endpoints, "skeleton_endpoints", "degree==1", "count", int)
     _add("bbox", f"({bbox.x_min},{bbox.y_min},{bbox.x_max},{bbox.y_max})", "bbox_xyxy", "mask_bbox", "px", str)
 
     if height_mm is not None:
@@ -329,7 +329,6 @@ def save_side_overlay(
         cx = int(M["m10"] / M["m00"])
         cy = int(M["m01"] / M["m00"])
         cv2.circle(overlay, (cx, cy), 4, (0, 0, 255), -1)
-        
     #สี
     color_name, hue_med = _color_name_under_mask(rgb_img, slot_mask)
 

@@ -4,7 +4,7 @@ def add_v_connected_to_a(
     rgb, base_a_mask,
     # ทำ v-mask
     method="fixed",            # "fixed" | "otsu" | "percentile"
-    v_min=130, v_max=255,      # ใช้เมื่อ method="fixed"
+    v_min=150, v_max=255,      # ใช้เมื่อ method="fixed"
     percentile=85,             # ใช้เมื่อ method="percentile"
     s_max=None,                # ใส่ค่านี้ถ้าต้องการกันของสีซีด (S ต่ำ) เช่น 80
     # กันแฟลช/สเกลขาวจัด
@@ -26,7 +26,7 @@ def add_v_connected_to_a(
 
     # ---------- 1) สร้าง v-mask ----------
     if method == "fixed":
-        _, vmask = cv2.threshold(V, 130, 255, cv2.THRESH_BINARY)
+        _, vmask = cv2.threshold(V, v_min, v_max, cv2.THRESH_BINARY)
         thr_note = f"plantcv_light: V>{int(v_min)}"
         # (ถ้าต้องการ upper bound ด้วย v_max ให้ AND เพิ่ม)
         if v_max is not None and v_max < 255:
@@ -100,7 +100,6 @@ def add_v_connected_to_a(
             if np.array_equal(seeds, prev): break
             prev = seeds.copy()
         v_connected = seeds  # ทุกอันจาก V ที่เชื่อมต่อกับฐาน a
-
 
     # ---------- 3) ตัดคอมโพเนนต์เล็ก ๆ ----------
     if min_area_keep and min_area_keep > 0:

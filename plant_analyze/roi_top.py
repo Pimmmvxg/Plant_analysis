@@ -21,7 +21,6 @@ def make_grid_rois(rgb_img, rows, cols, roi_radius=None, margin=0.05, shape="cir
     DX = (x1 - x0) / float(cols)   # << ต่างจากเดิม: หารด้วย cols (ไม่ใช่ cols-1)
     DY = (y1 - y0) / float(rows)  # << ต่างจากเดิม: หารด้วย rows
 
-    # ศูนย์กลาง "สุดขอบ" เมื่อวางกลางเซลล์
     cx_min = x0 + 0.5 * DX
     cx_max = x0 + (cols - 0.5) * DX
     cy_min = y0 + 0.5 * DY
@@ -76,7 +75,7 @@ def make_top_rois_auto(
     debug_out_path=None,
 ):
     """
-    จับคอมโพเนนต์จาก mask (top view) แล้ว 'รวมกล่องที่ชิดกัน' แบบเดียวกับ side
+    จับคอมโพเนนต์จาก mask (top view) แล้ว รวมbbox ที่อยู่ชิดกัน
     คืน rois = [{"idx": i, "bbox": (x,y,w,h), "comp_mask": ...}, ...]
     """
     # ----- resolve params (เหมือนฝั่ง side) -----
@@ -128,7 +127,6 @@ def make_top_rois_auto(
     if debug_out_path:
         cv2.imwrite(debug_out_path, dbg)
     return rois
-
 
 def _merge_nearby_boxes_top(boxes, gap=8):
     """

@@ -13,7 +13,6 @@ def make_side_roi(rgb_img, mask_fill, USE_FULL_IMAGE_ROI, ROI_X, ROI_Y, ROI_W, R
         h = max(1, min(ROI_H, H - y))
 
     _ = pcv.roi.rectangle(img=rgb_img, x=x, y=y, w=w, h=h) # debug only
-
     _fc = cv2.findContours(mask_fill.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     contours = _fc[2] if len(_fc) == 3 else _fc[0]
 
@@ -72,7 +71,6 @@ def make_side_rois_auto(
         x, y, w, h, area = stats[cid]
         if area >= min_area_px:
             boxes.append([int(x), int(y), int(w), int(h)])
-
     if not boxes:
         return []
 
@@ -94,7 +92,6 @@ def make_side_rois_auto(
     if debug_out_path:
         cv2.imwrite(debug_out_path, dbg)
     return rois
-
 
 def _merge_nearby_boxes(boxes, gap=100, v_overlap_min=0.0):
     """รวมกล่องที่ชิดกันในแนวแกน X และมี vertical overlap ถึงเกณฑ์"""

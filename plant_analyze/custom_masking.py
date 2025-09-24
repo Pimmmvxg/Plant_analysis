@@ -57,7 +57,7 @@ def auto_thresh_lab_a_otsu_guard(
     h0, h1 = green_h
     green_band = (Hh >= h0) & (Hh <= h1)
     mask &= green_band
-
+    
     # === (ทางเลือก) ROI เฉพาะส่วนล่างของภาพ ===
     if use_bottom_roi:
         y0 = int((1.0 - bottom_roi_ratio) * H)

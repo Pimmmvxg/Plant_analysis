@@ -421,7 +421,6 @@ def _mask_from_spec(rgb_img, spec: dict):
     obj = spec.get("object_type", "dark") or "dark"
     ksize = spec.get("ksize", None)
     offset = spec.get("offset", 0)
-
     gray = _gray_from_channel(rgb_img, ch)
     
     if method == "binary":
