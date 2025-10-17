@@ -145,6 +145,7 @@ def analyze_one_top(slot_mask, sample_name, eff_r, rgb_img):
     pcv.outputs.add_observation(sample=sample_name, variable='color_name',
                                 trait='text', method='hue_median→name', scale='none',
                                 datatype=str, value=col_name, label='dominant color')
+    
 def save_top_overlay(
     rgb_img,
     slot_mask,
@@ -340,7 +341,7 @@ def combine_top_overlays(
                 if this_hull is not None and len(this_hull) >= 3:
                     cv2.drawContours(overlay, [this_hull], -1, (60, 255, 0), 3)      # green
                     x, y, w, h = cv2.boundingRect(this_hull)
-                    cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 255, 255), 3)  # เหลือง
+                    cv2.rectangle(overlay, (x, y), (x + w, y + h), (255, 0, 255), 3)  # เหลือง
 
         # centroid แต่ละต้น + label
         M = cv2.moments(m, binaryImage=True)
@@ -351,6 +352,11 @@ def combine_top_overlays(
             cv2.circle(overlay, (cx, cy), 3, (0, 255, 255), -1)  # จุด centroid (เหลือง)
             if eff_r is not None and eff_r > 0:
                 cv2.circle(overlay, (cx, cy), int(eff_r), (255, 0, 255), 3)
+                
+        _ret = cv2.findContours(m.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours = _ret[0] if len(_ret) == 2 else _ret[1]
+        if contours:
+            cv2.drawContours(overlay, contours, -1, (0, 255, 255), 3)
 
         # ค่าสี/พื้นที่ต่อ-ต้น
         mask_idx = m > 0
@@ -369,7 +375,7 @@ def combine_top_overlays(
         if cx is not None and cy is not None:
             small = f"{slot_name}"
             cv2.putText(overlay, small, (cx + 6, cy - 6),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (204, 102, 0), 2, cv2.LINE_AA)
+                        cv2.FONT_HERSHEY_SIMPLEX, 2.5, (255, 0, 255), 4, cv2.LINE_AA)
 
         # เก็บเข้ารายการ legend
         legend_lines.append(f"{slot_name} | Main Color: {color_name} | Area: {area_str}")

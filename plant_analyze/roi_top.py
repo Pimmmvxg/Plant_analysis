@@ -70,62 +70,74 @@ def make_top_rois_auto(
     mask_fill,
     cfg=None,
     min_area_px=None,
-    merge_gap_px=None,
     close_iters=None,
     debug_out_path=None,
+    merge_gap_px=None
 ):
     """
-    จับคอมโพเนนต์จาก mask (top view) แล้ว รวมbbox ที่อยู่ชิดกัน
-    คืน rois = [{"idx": i, "bbox": (x,y,w,h), "comp_mask": ...}, ...]
+    เวอร์ชัน 'ปิดการรวมถาวร'
+    - ROI = component ตรงๆ (หนึ่งคอมโพเนนต์ต่อหนึ่ง ROI)
+    - ไม่ทำการ merge กล่อง ไม่พิจารณา gap/overlap ใดๆ ทั้งสิ้น
+    คืนค่า: rois = [{"idx": i, "bbox": (x,y,w,h), "comp_mask": mask_single_cid, "cids":[cid]} ...]
     """
-    # ----- resolve params (เหมือนฝั่ง side) -----
+
+    # ===== config =====
     if cfg is not None:
         if min_area_px is None:
             min_area_px = int(getattr(cfg, "TOP_MIN_PLANT_AREA", getattr(cfg, "MIN_PLANT_AREA", 800)))
-        if merge_gap_px is None:
-            merge_gap_px = int(getattr(cfg, "TOP_MERGE_GAP", 5))
         if close_iters is None:
             close_iters = int(getattr(cfg, "TOP_CLOSE_ITERS", 1))
     else:
-        min_area_px  = int(800 if min_area_px  is None else min_area_px)
-        merge_gap_px = int(20  if merge_gap_px is None else merge_gap_px)
+        min_area_px = int(800 if min_area_px is None else min_area_px)
         close_iters  = int(1   if close_iters  is None else close_iters)
 
     H, W = rgb_img.shape[:2]
     m = (mask_fill > 0).astype(np.uint8) * 255
 
-    # morphology ปรับแบบเดียวกับ side
-    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, k, iterations=close_iters)
-    # กรองเศษเล็กออก (area-based)
+    # ===== morphology (เล็กน้อยพอ ไม่ให้คอมโพเนนต์ติดกัน) =====
+    if close_iters > 0:
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, k, iterations=close_iters)
+
+    # ===== connected components =====
     num, labels, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
-    keep = np.zeros_like(m)
-    boxes = []
+
+    # ===== เก็บเฉพาะคอมโพเนนต์ที่ผ่านเกณฑ์ =====
+    comps = []  # [{cid, bbox, area}]
     for cid in range(1, num):
         x, y, w, h, area = stats[cid]
         if area >= min_area_px:
-            keep[labels == cid] = 255
-            boxes.append([int(x), int(y), int(w), int(h)])
+            comps.append({"cid": cid, "bbox": (int(x), int(y), int(w), int(h)), "area": int(area)})
 
-    if not boxes:
+    if not comps:
         return []
 
-    # รวมกล่องที่ชิดกันแนวนอนตาม gap เหมือน side
-    boxes = _merge_nearby_boxes_top(boxes, gap=int(merge_gap_px))
-    boxes.sort(key=lambda b: b[0])
-
+    # ===== ไม่ merge: ROI = component ตรงๆ =====
     rois = []
     dbg = rgb_img.copy()
-    for i, (x, y, w, h) in enumerate(boxes, start=1):
+    for i, c in enumerate(sorted(comps, key=lambda d: d["bbox"][0]), start=1):
+        x, y, w, h = c["bbox"]
+        cid = c["cid"]
+
+        # mask เฉพาะคอมโพเนนต์นี้เท่านั้น
         comp_mask = np.zeros((H, W), dtype=np.uint8)
-        comp_mask[y:y+h, x:x+w] = keep[y:y+h, x:x+w]
-        rois.append({"idx": i, "bbox": (x, y, w, h), "comp_mask": comp_mask})
-        # วาด debug
-        cv2.rectangle(dbg, (x, y), (x+w, y+h), (0, 255, 0), 2)
-        cv2.putText(dbg, f"#{i}", (x, max(0, y-6)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2, cv2.LINE_AA)
+        comp_mask[labels == cid] = 255
+
+        rois.append({
+            "idx": i,
+            "bbox": (x, y, w, h),
+            "comp_mask": comp_mask,
+            "cids": [cid],
+        })
+
+        # debug box
+        cv2.rectangle(dbg, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        cv2.putText(dbg, f"#{i}", (x, max(0, y - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
 
     if debug_out_path:
         cv2.imwrite(debug_out_path, dbg)
+
     return rois
 
 def _merge_nearby_boxes_top(boxes, gap=8):

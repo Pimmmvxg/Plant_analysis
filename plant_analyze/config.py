@@ -11,8 +11,8 @@ SAVE_TOP_OVERLAY = True
 SAVE_SIDE_ROIS_OVERVIEW = True  # เซฟรูปภาพรวมกรอบ ROI (#1, #2, ...)
 
 # I/O
-INPUT_PATH: Optional[Path] = None
-#INPUT_PATH: Optional[Path] = Path(r"R:\01-Organize\01-Management\01-Data Center\Brisk\06-AI & Machine Learning (D0340)\04-IOT_Smartfarm\picture_original_topview_smartfarm\picture_topview_03092025_140927.jpg")
+#INPUT_PATH: Optional[Path] = None
+INPUT_PATH: Optional[Path] = Path(r"C:\Cantonese\1\picture_topview_12092025_131834.png")
 OUTPUT_DIR: Optional[Path] = None
 VIEW: Optional[str] = None       # "side" | "top" | None
 EXTENSIONS = ['.png', '.jpg', '.jpeg']  # Supported image file extensions
@@ -121,7 +121,7 @@ def resolve_runtime(input_path: str | Path,
             "green_h": (20, 95),
             "bottom_roi_ratio": 0.60,
             "min_cc_area": 200,
-        } 
+        }
     elif VIEW == "top":
         MASK_SPEC = {
             "channel": "lab_a",
@@ -140,19 +140,20 @@ def resolve_runtime(input_path: str | Path,
     else:
         MASK_SPEC = None  
 
+
 # TOP view parameters
-TOP_ROI_MODE = "auto" 
-TOP_SUMMARY_MODE = "per_roi"
+TOP_ROI_MODE = "auto"               # grid |auto
+TOP_SUMMARY_MODE = "per_object"     # per_object | per roi
 TOP_MIN_PLANT_AREA = 4000      
 TOP_MERGE_GAP = 0             # px; มาก = รวมง่าย
-TOP_CLOSE_ITERS = 1            # ปิดรูเล็ก ๆ ก่อนจับกล่อง
+TOP_CLOSE_ITERS = 0            # ปิดรูเล็ก ๆ ก่อนจับกล่อง
 
 STEM_CONNECT_MODE = "cc_touch"
 STEM_CC_CLOSE_K   = 3
 
-ROWS, COLS = 2, 3
+ROWS, COLS = 2, 4
 ROI_TYPE = "partial"  # 'partial' | 'cutto' | 'largest'
-ROI_RADIUS = 400
+ROI_RADIUS = 100
 TOP_EXPECT_N_MIN = 4
 TOP_EXPECT_N_MAX = 10
 
@@ -160,7 +161,7 @@ TOP_EXPECT_N_MAX = 10
 #add v to connect top-view
 ENABLE_STEM_RESCUE        = True   # เปิด/ปิดฟีเจอร์กู้ก้าน
 STEM_V_METHOD = "fixed"            # "fixed"|"otsu"|"percentile"
-STEM_V_MIN = 100                    # มืด 50 / สว่าง 100
+STEM_V_MIN = 165                    # มืด 50 / สว่าง 100
 STEM_V_MAX = 255
 RESCUE_B_OTSU_FALLBACK    = 135
 RESCUE_L_MIN_FOR_STEM     = 120
@@ -173,19 +174,19 @@ RESCUE_MIN_AREA_PX        = 800        # ปรับตามความละ
 
 ENABLE_SIDE_STEM_RESCUE = True    #add v to connect side-view
 SIDE_V_METHOD = "fixed"   # "fixed" | "otsu" | "percentile"
-SIDE_V_MIN = 150           # 35 = dark, 150 = light
+SIDE_V_MIN = 180           # 35 = dark, 150 = light
 SIDE_V_MAX = 255
-
+POT_ID = 4
 # -------------------------------------------------
 # SIDE view parameters (rectangle ROI)
 USE_FULL_IMAGE_ROI = False
 #ROI_X, ROI_Y, ROI_W, ROI_H = 100, 100, 240, 240
-MIN_PLANT_AREA = 600
-SIDE_MERGE_GAP = 200
+MIN_PLANT_AREA = 15000
+SIDE_MERGE_GAP = 0
 SIDE_EXPECT_N_MIN = 3
 SIDE_EXPECT_N_MAX = 20
 SIDE_BRIDGE_GAP_X = 5
-SIDE_BRIDGE_GAP_Y = 30
+SIDE_BRIDGE_GAP_Y = 20
 
 # -------------------------------------------------
 # Calibration scale

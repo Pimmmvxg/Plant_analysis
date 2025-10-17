@@ -152,36 +152,37 @@ def analyze_one_side(slot_mask: np.ndarray, sample_name: str, rgb_img: np.ndarra
     _save_debug(mask_vis, f"{sample_name}_side_mask.png")
 
     #Analyze Skeletonize & prune
-    '''
-    # Skeletonize & prune
-    skel = _skeletonize(slot_mask)
-    pruned = _prune_robust(skel, slot_mask)
-
-    # Save skeleton debug (raw + pruned)
-    skel_vis = rgb_img.copy()
-    yy, xx = np.where(skel > 0)
-    skel_vis[yy, xx] = (0, 255, 255)
-    _save_debug(skel_vis, f"{sample_name}_side_skeleton.png")
-
-    pruned_vis = rgb_img.copy()
-    yy, xx = np.where(pruned > 0)
-    pruned_vis[yy, xx] = (255, 255, 0)
-    _save_debug(pruned_vis, f"{sample_name}_side_skeleton_pruned.png")
-
-    # Endpoints
-    endpoints = _find_endpoints(pruned)
-    n_endpoints = int(endpoints.shape[0])
+    if getattr(cfg, "ENABLE_SKELETON_SIDE", False):
     
-    endpoints_vis = pruned_vis.copy()
-    if n_endpoints >= 1:
-        for (ey, ex) in endpoints:
-            cv2.circle(endpoints_vis, (int(ex), int(ey)), 3, (0, 0, 255), -1)
-    else:
-        pcv.outputs.add_observation(sample=sample_name, variable="has_endpoints",
-                                    trait="flag", method="skeleton_endpoints",
-                                    scale="None", datatype=bool, value=False, label="has_endpoints")
-    _save_debug(endpoints_vis, f"{sample_name}_side_endpoints.png")
-    '''
+        # Skeletonize & prune
+        skel = _skeletonize(slot_mask)
+        pruned = _prune_robust(skel, slot_mask)
+
+        # Save skeleton debug (raw + pruned)
+        skel_vis = rgb_img.copy()
+        yy, xx = np.where(skel > 0)
+        skel_vis[yy, xx] = (0, 255, 255)
+        _save_debug(skel_vis, f"{sample_name}_side_skeleton.png")
+
+        pruned_vis = rgb_img.copy()
+        yy, xx = np.where(pruned > 0)
+        pruned_vis[yy, xx] = (255, 255, 0)
+        _save_debug(pruned_vis, f"{sample_name}_side_skeleton_pruned.png")
+
+        # Endpoints
+        endpoints = _find_endpoints(pruned)
+        n_endpoints = int(endpoints.shape[0])
+        
+        endpoints_vis = pruned_vis.copy()
+        if n_endpoints >= 1:
+            for (ey, ex) in endpoints:
+                cv2.circle(endpoints_vis, (int(ex), int(ey)), 3, (0, 0, 255), -1)
+        else:
+            pcv.outputs.add_observation(sample=sample_name, variable="has_endpoints",
+                                        trait="flag", method="skeleton_endpoints",
+                                        scale="None", datatype=bool, value=False, label="has_endpoints")
+        _save_debug(endpoints_vis, f"{sample_name}_side_endpoints.png")
+    
 
     # Size from mask bbox
     bbox = _bbox_from_mask(slot_mask)
@@ -329,6 +330,7 @@ def save_side_overlay(
         cx = int(M["m10"] / M["m00"])
         cy = int(M["m01"] / M["m00"])
         cv2.circle(overlay, (cx, cy), 4, (0, 0, 255), -1)
+        
     #สี
     color_name, hue_med = _color_name_under_mask(rgb_img, slot_mask)
 
@@ -346,7 +348,7 @@ def save_side_overlay(
     pad_w = max(10 + len(text) * 9, 260)
     cv2.rectangle(overlay, (10, y0 - 22), (10 + pad_w, y0 + 8), (0, 0, 0), -1)
     cv2.putText(overlay, text, (12, y0),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
 
     _save_debug(overlay, f"{sample_name}_side_overlay.png")
     return overlay
@@ -423,7 +425,6 @@ def combine_side_overlays(
             hull = cv2.convexHull(all_pts)
             if hull is not None and len(hull) >= 3:
                 cv2.polylines(overlay, [hull], True, (255, 0, 255), 2)  # ม่วง
-
         # centroid
         M = cv2.moments(mask, binaryImage=True)
         if M["m00"] > 0:

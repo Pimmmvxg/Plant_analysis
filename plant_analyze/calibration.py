@@ -113,10 +113,10 @@ def get_scale_from_rectangle(
     image,
     rect_size_mm=cfg.RECT_SIZE_MM, # (w, h) ของสี่เหลี่ยมอ้างอิงจริง (mm)
     crop_top_ratio=0.7,
-    min_area=3000000,
+    min_area=9050000,
     eps_fraction=0.04, # การลดจุดมุม ได้มุมเยอะเพิ่มค่า มุมน้อยลดค่า
     rect_tol=0.3, # ยอมให้ aspect ratio เพี้ยนจากของจริงได้
-    min_rectangularity=0.6, # ความเป็นสี่เหลี่ยมขั้นต่ำ
+    min_rectangularity=0.7, # ความเป็นสี่เหลี่ยมขั้นต่ำ
     previous_scale=None,
     fallback_scale=cfg.FALLBACK_MM_PER_PX,
     save_debug=True,
@@ -133,7 +133,7 @@ def get_scale_from_rectangle(
     
     if view == "top":
         V = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)[:,:,2]  # Value channel
-        th = pcv.threshold.binary(gray_img=V, threshold=200, object_type='light')
+        th = pcv.threshold.binary(gray_img=V, threshold=190, object_type='light')
         
         return scale_from_contours(
             th,
@@ -150,6 +150,7 @@ def get_scale_from_rectangle(
             debug_name=f"{debug_name}_top"
         )
     else:  # side view
+        '''
         L = cv2.cvtColor(roi, cv2.COLOR_BGR2Lab)[:,:,0]
         L = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8)).apply(L)
         _, th = cv2.threshold(L, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -157,6 +158,24 @@ def get_scale_from_rectangle(
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
         th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel, 1)
         th = cv2.morphologyEx(th, cv2.MORPH_OPEN, kernel, 1)
+        '''
+        # แปลง BGR → HSV
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
+        # ดึง V-channel (ความสว่าง)
+        V = hsv[:,:,2]
+
+        # threshold แบบ fixed = 150
+        _, th = cv2.threshold(V, 150, 255, cv2.THRESH_BINARY)
+
+        # kernel วงรี 5x5
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
+
+        # Closing: ปิดรูเล็กๆ
+        th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel, 1)
+
+        # Opening: ลบ noise จุดเล็กๆ
+        th = cv2.morphologyEx(th, cv2.MORPH_OPEN, kernel, 1)  
         
         return scale_from_contours(
             th,

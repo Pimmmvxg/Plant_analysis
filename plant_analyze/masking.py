@@ -138,7 +138,7 @@ def connect_mask_holes(mask: np.ndarray,
         ky = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 2*int(gap_y)+1))
         m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, ky, iterations=iterations)
     return ensure_binary(m, normalize_orientation=False)
-
+'''
 def prune_cross_bridge(m_before, m_after,
                        max_added_area=1500,
                        max_bridge_thickness=20):
@@ -181,6 +181,7 @@ def prune_cross_bridge(m_before, m_after,
 
     out = ((before == 1) | (keep == 1)).astype(np.uint8) * 255
     return out
+    '''
 
 def clean_mask(m, close_ksize=3, min_obj_size=500, keep_largest=False, keep_top_k=None):
     """
@@ -309,7 +310,7 @@ def auto_select_mask(rgb_img):
 
             ratio = float(np.count_nonzero(m)) / max(area_total, 1)
 
-            # --- เกณฑ์แบบ view-aware + ควบคุมด้วย config ---
+            # เกณฑ์แบบ view-aware + ควบคุมด้วย config
             target = float(getattr(cfg, "MASK_TARGET_COVERAGE", 0.05))
             view = str(getattr(cfg, "VIEW", "top")).lower()
             if view == "top":
@@ -475,7 +476,7 @@ def _mask_from_spec(rgb_img, spec: dict):
         "n_components": int(n_comp),
         "solidity": float(solidity),
     }
-    # --- Bridge + Log ที่สาขา MASK_SPEC ด้วย ---
+
     if str(getattr(cfg, "VIEW", "top")).lower() == "side":
         bx = int(getattr(cfg, "SIDE_BRIDGE_GAP_X", 100))
         by = int(getattr(cfg, "SIDE_BRIDGE_GAP_Y", 200))
@@ -512,14 +513,14 @@ def _mask_from_file(path_str: str):
     return m, info
 
 def get_initial_mask(rgb_img):
-    # 1) ใช้ไฟล์มาสก์ถ้ากำหนด
+    # 1) ใช้ไฟล์ mask ถ้ามีกำหนดไว้
     if getattr(cfg, "MASK_PATH", None):
         try:
             return _mask_from_file(cfg.MASK_PATH)
         except Exception as e:
             print("WARN: MASK_PATH failed, fallback to next mode:", e)
 
-    # 2) ใช้สเปก threshold ถ้ากำหนด
+    # 2) ใช้ spec threshold ถ้ากำหนด
     if getattr(cfg, "MASK_SPEC", None):
         try:
             return _mask_from_spec(rgb_img, cfg.MASK_SPEC)
