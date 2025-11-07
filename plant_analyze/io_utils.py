@@ -51,3 +51,4 @@ def build_file_list(input_path: Path, extensions):
         return [p for p in input_path.glob('**/*') if p.suffix.lower() in extensions]
     else:
         return []
+
