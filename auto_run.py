@@ -2,7 +2,7 @@ import argparse
 from pathlib import Path
 
 from plant_analyze import cli
-from plant_analyze import config as cfg  # ใช้โมดูล เพื่อเข้าถึง cfg.INPUT_PATH
+from plant_analyze import config as cfg  
 
 def main():
     ap = argparse.ArgumentParser()

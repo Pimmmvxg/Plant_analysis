@@ -107,7 +107,6 @@ def ensure_binary(mask, normalize_orientation: bool = True):
         + cfg.W_SOLIDITY * solidity
         - cfg.W_BORDER * border_penalty)
 
-
     return m if _score(m) >= _score(m_inv) else m_inv
 
 def _keep_top_k_components(m: np.ndarray, k: int) -> np.ndarray:
@@ -448,9 +447,17 @@ def _mask_from_spec(rgb_img, spec: dict):
         )
         
     elif method == "side_auto":
-        t, m_guard = auto_thresh_lab_a_otsu_guard(rgb_img,
-                                                  object_type=spec.get("object_type", "dark"),
-                                                  )
+        t, m_guard = auto_thresh_lab_a_otsu_guard(
+            rgb_img,
+            object_type=spec.get("object_type", "dark"),
+            v_bg=spec.get("v_bg", 45),
+            s_min=spec.get("s_min", 30),
+            v_shadow_max=spec.get("v_shadow_max", 115),
+            green_h=spec.get("green_h", (35, 95)),
+            use_bottom_roi=True,
+            bottom_roi_ratio=spec.get("bottom_roi_ratio", 0.80),
+            min_cc_area=spec.get("min_cc_area", 200),
+            )
         m = ensure_binary(m_guard, normalize_orientation=True)
 
     else:

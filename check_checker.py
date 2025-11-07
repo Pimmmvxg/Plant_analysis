@@ -7,7 +7,7 @@ NUM_SQUARES = (4,45)  # (cols, rows) จำนวน "ช่อง"
 pattern_size = (NUM_SQUARES[0] - 1, NUM_SQUARES[1] - 1)
 
 # ---- 2) โหลดภาพ ----
-img = cv2.imread(r"C:\Cantonese\real\fg.jpg")
+img = cv2.imread(r"R:\01-Organize\01-Management\01-Data Center\Brisk\06-AI & Machine Learning (D0340)\04-IOT_Smartfarm\picture_original_topview_smartfarm\picture_topview_A_05112025_090038.jpg")
 if img is None:
     raise FileNotFoundError("ไม่พบภาพที่ระบุ")
 

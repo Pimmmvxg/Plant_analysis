@@ -3,7 +3,7 @@ from pathlib import Path
 from .tb_client import ThingsboardClient
 
 def publish_data(json_path: str | Path,
-                 attribute_keys = ("side_1_height_mm", "side_1_length_mm",
+                 telemetry_keys = ("side_1_height_mm", "side_1_length_mm",
                                   "side_2_height_mm", "side_2_length_mm",
                                   "global_color_name", 
                                   "top_1_color_name", "top_1_area_mm2",
@@ -14,7 +14,7 @@ def publish_data(json_path: str | Path,
                                   "top_6_color_name", "top_6_area_mm2",
                                   "top_7_color_name", "top_7_area_mm2",
                                   "top_8_color_name", "top_8_area_mm2",
-                                  "filename","Pot_id"
+                                  "filename"
                                   ),
                  ):
     p = Path(json_path)
@@ -24,29 +24,29 @@ def publish_data(json_path: str | Path,
     with p.open("r", encoding="utf-8") as f:
         data = json.load(f)
         
-    attrs = {}
+    telemetry = {}
     missing = []
-    for key in attribute_keys:
+    for key in telemetry_keys:
         if key in data:
             val = data[key]
             # กัน NaN/Inf
             if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
                 continue
-            attrs[key] = val
+            telemetry[key] = val
         else:
             missing.append(key)
 
-    if not attrs:
-        raise ValueError(f"No attribute keys found in JSON. Expected any of: {attribute_keys}")
+    if not telemetry:
+        raise ValueError(f"No telemetry keys found in JSON. Expected any of: {telemetry_keys}")
 
     # 4) ส่งขึ้น ThingsBoard
     cli = ThingsboardClient()
     try:
-        cli.publish_attributes(attrs)
+        cli.publish_attributes(telemetry)
     finally:
         try:
             cli.stop()
         except Exception:
             pass
 
-    return {"attributes": attrs, "missing": missing, "json_path": str(p)}
+    return {"telemetry": telemetry, "missing": missing, "json_path": str(p)}

@@ -1,6 +1,6 @@
-# roi_top.py (เวอร์ชันแก้แล้ว)
 import cv2
 import numpy as np
+from plantcv import plantcv as pcv
 
 def make_grid_rois(rgb_img, rows, cols, roi_radius=None, margin=0.05, shape="circle"):
     """
@@ -69,7 +69,7 @@ def make_top_rois_auto(
     rgb_img,
     mask_fill,
     cfg=None,
-    min_area_px=None,
+    min_area_px=2000,
     close_iters=None,
     debug_out_path=None,
     merge_gap_px=None
@@ -140,23 +140,72 @@ def make_top_rois_auto(
 
     return rois
 
-def _merge_nearby_boxes_top(boxes, gap=8):
-    """
-    รวมกล่องที่ชิดกันในแนวนอน (logic เดียวกับ side’s _merge_nearby_boxes แต่ตัดเรื่อง v-overlap ออก)
-    """
-    if gap is None or gap <= 0:
-        return sorted(boxes, key=lambda b: b[0])
-    boxes = sorted(boxes, key=lambda b: b[0])
-    merged = [boxes[0]]
-    for b in boxes[1:]:
-        x, y, w, h = b
-        x0, y0, w0, h0 = merged[-1]
-        ex = [x0 - gap, y0, w0 + 2*gap, h0]  # ขยายซ้าย-ขวา
-        intersect = not (ex[0]+ex[2] <= x or x+w <= ex[0] or ex[1]+ex[3] <= y or y+h <= ex[1])
-        if intersect:
-            nx = min(x0, x); ny = min(y0, y)
-            nx2 = max(x0+w0, x+w); ny2 = max(y0+h0, y+h)
-            merged[-1] = [nx, ny, nx2 - nx, ny2 - ny]
-        else:
-            merged.append(b)
-    return merged
+def create_roi_top_partial(
+    rgb_img,
+    mask_fill,
+    ROI_X, ROI_Y, ROI_W, ROI_H,
+    debug_path=None
+):
+    if mask_fill.ndim == 3:
+        mask_fill = cv2.cvtColor(mask_fill, cv2.COLOR_BGR2GRAY)
+    bin_mask = (mask_fill > 0).astype(np.uint8) * 255
+    H, W = bin_mask.shape[:2]
+    
+    x = max(0, min(int(ROI_X), W - 1))
+    y = max(0, min(int(ROI_Y), H - 1))
+    w = max(1, min(int(ROI_W), W - x))
+    h = max(1, min(int(ROI_H), H - y))
+    roi_rect = (x, y, w, h)
+    
+    ret = pcv.roi.rectangle(img=rgb_img, x=x, y=y, w=w, h=h)
+    roi_obj = ret[0] if isinstance(ret, tuple) else ret
+    
+    filtered = pcv.roi.filter(mask=bin_mask, roi=roi_obj, roi_type='partial')
+    
+    if filtered.dtype != np.uint8:
+        filtered = filtered.astype(np.uint8)
+    if filtered.max() not in (1, 255):
+        _, filtered = cv2.threshold(filtered, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    else:
+        if filtered.max() == 1:
+            filtered = filtered * 255
+            
+    cnts = cv2.findContours(filtered, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours = cnts[0] if len(cnts) == 2 else cnts[1]
+    
+    dbg = rgb_img.copy()
+    
+    if not contours:
+        cv2.rectangle(dbg, (x, y), (x + w - 1, y + h - 1), (255, 0, 0), 2)
+        if debug_path:
+            cv2.imwrite(debug_path, dbg)
+        return [], roi_rect
+    
+    roi_mask = np.zeros_like(bin_mask, dtype=np.uint8)
+    cv2.rectangle(roi_mask, (x, y), (x + w - 1, y + h - 1), 255, thickness=-1)
+    
+    out_rois = []
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < 1:
+            continue
+        
+        cnt_mask = np.zeros_like(bin_mask, dtype=np.uint8)
+        cv2.drawContours(cnt_mask, [cnt], -1, 255, thickness=cv2.FILLED)
+        
+        intersect_mask = cv2.bitwise_and(cnt_mask, roi_mask)
+        intersect_area = cv2.countNonZero(intersect_mask)
+        overlap_ratio = intersect_area / (area + 1e-12)
+        
+        x_, y_, w_, h_ = cv2.boundingRect(cnt)
+        out_rois.append({
+            "bbox": (x_, y_, w_, h_),
+            "comp_mask": cnt_mask,
+        })
+
+        cv2.rectangle(dbg, (x_, y_), (x_ + w_ - 1, y_ + h_ - 1), (0, 255, 0), 2)
+        cv2.putText(dbg, f"A={int(area)} ov={overlap_ratio:.2f}",
+                    (x_, max(0, y_ - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                    (0, 255, 0), 2, cv2.LINE_AA)
+    
+

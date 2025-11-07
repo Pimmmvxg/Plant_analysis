@@ -112,7 +112,7 @@ def scale_from_contours(
 def get_scale_from_rectangle(
     image,
     rect_size_mm=cfg.RECT_SIZE_MM, # (w, h) ของสี่เหลี่ยมอ้างอิงจริง (mm)
-    crop_top_ratio=0.7,
+    crop_top_ratio=1.0,
     min_area=9050000,
     eps_fraction=0.04, # การลดจุดมุม ได้มุมเยอะเพิ่มค่า มุมน้อยลดค่า
     rect_tol=0.3, # ยอมให้ aspect ratio เพี้ยนจากของจริงได้

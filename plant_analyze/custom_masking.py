@@ -4,18 +4,19 @@ def auto_thresh_lab_a_otsu_guard(
         rgb_img,
         object_type="dark",
         # 1) คัดพื้นหลังดำคร่าว ๆ
-        v_bg=45,                 # กันฉากดำ/มืด
+        v_bg=51,                 # กันฉากดำ/มืด
         blur_ksize=3,
         # 2) กันเงา/พื้นหลังเทา
-        s_min=30,                # S ต่ำ = เทา → ตัดทิ้ง
-        v_shadow_max=115,        # V ต่ำ = มืด/เงา → ตัดทิ้ง
+        s_min=39,                # S ต่ำ = เทา → ตัดทิ้ง
+        v_shadow_max=153,        # V ต่ำ = มืด/เงา → ตัดทิ้ง
+        v_high_guard=255,
         # 3) บังคับโทน “เขียว”
-        green_h=(20, 95),        # ช่วง H ของใบเขียว (OpenCV: 0–179)
+        green_h=(21, 40),        # ช่วง H ของใบเขียว (OpenCV: 0–179)
         # 4) (ทางเลือก) ใช้ ROI เฉพาะส่วนล่างของภาพ
         use_bottom_roi=True,
         bottom_roi_ratio=0.80,   # ใช้สัดส่วนกี่ % จากล่างขึ้นบน (0.60 = ล่าง 60%)
         # 5) ทำความสะอาด
-        min_cc_area=200,         # ตัดชิ้นเล็ก ๆ
+        min_cc_area=200,         # พื้นที่ขั้นต่ำ
         open_ksize=3,
         close_ksize=8
     ):
@@ -79,5 +80,10 @@ def auto_thresh_lab_a_otsu_guard(
     for i in range(1, num_labels):
         if stats[i, cv2.CC_STAT_AREA] >= min_cc_area:
             cleaned[labels == i] = 255
+            
+    s_min_green = 10
+    v_min_green = 0
+    green_sv_gaurd = (Ss >= s_min_green) & (Vv >= v_min_green)
+    cleaned = cv2.bitwise_and(cleaned, green_sv_gaurd.astype(np.uint8)*255)
 
     return t, cleaned

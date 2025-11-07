@@ -9,10 +9,11 @@ THREADS = 1               # Number of threads to use for processing
 SAVE_MASK = True          # Save the mask image
 SAVE_TOP_OVERLAY = True
 SAVE_SIDE_ROIS_OVERVIEW = True  # เซฟรูปภาพรวมกรอบ ROI (#1, #2, ...)
+ENABLE_THINGSBOARD = False  # เปิด/ปิดการส่งข้อมูลขึ้น ThingsBoard
 
 # I/O
-#INPUT_PATH: Optional[Path] = None
-INPUT_PATH: Optional[Path] = Path(r"C:\Cantonese\1\picture_topview_12092025_131834.png")
+INPUT_PATH: Optional[Path] = None
+#INPUT_PATH: Optional[Path] = Path(r"C:\Cantonese\1\picture_topview_12092025_131834.png")
 OUTPUT_DIR: Optional[Path] = None
 VIEW: Optional[str] = None       # "side" | "top" | None
 EXTENSIONS = ['.png', '.jpg', '.jpeg']  # Supported image file extensions
@@ -118,11 +119,34 @@ def resolve_runtime(input_path: str | Path,
             "s_min": 30,
             "v_bg": 45,
             "v_shadow_max": 115,
-            "green_h": (20, 95),
+            "green_h": (10, 45),
             "bottom_roi_ratio": 0.60,
             "min_cc_area": 200,
         }
+        '''
+        
+        MASK_SPEC = {
+            "channel": "lab_a",
+            "method": "side_auto",  # ใช้ auto + guard
+            "object_type": "dark",
+            
+            "v_bg": 51,
+            "s_min": 39,
+            "v_shadow_max": 153,
+            "green_h": (21, 90),
+            
+            "s_min_green": 10,
+            "v_min_green": 45,
+            
+            "bottom_roi_ratio": 1.00,
+            "min_cc_area": 200,
+            "blur_ksize": 3,
+            "open_ksize": 3,
+            "close_ksize": 8,
+        }
+        '''        
     elif VIEW == "top":
+        '''
         MASK_SPEC = {
             "channel": "lab_a",
             "method": "otsu",
@@ -132,11 +156,16 @@ def resolve_runtime(input_path: str | Path,
         }
         '''
         MASK_SPEC = {
-            "channel": "hsv_v",
-            "method": "binary",
-            "threshold": "130",
-            "object_type": "light" 
-        }'''
+            "channel": "lab_a",
+            "method": "side_auto",  # ใช้ auto + guard
+            "object_type": "dark",
+            "s_min": 30,
+            "v_bg": 45,
+            "v_shadow_max": 115,
+            "green_h": (35, 95),
+            "bottom_roi_ratio": 0.60,
+            "min_cc_area": 200,
+        }
     else:
         MASK_SPEC = None  
 
@@ -159,7 +188,7 @@ TOP_EXPECT_N_MAX = 10
 
 # ---------- STEM RESCUE (TOP view) ----------
 #add v to connect top-view
-ENABLE_STEM_RESCUE        = True   # เปิด/ปิดฟีเจอร์กู้ก้าน
+ENABLE_STEM_RESCUE        = False   # เปิด/ปิดฟีเจอร์กู้ก้าน
 STEM_V_METHOD = "fixed"            # "fixed"|"otsu"|"percentile"
 STEM_V_MIN = 165                    # มืด 50 / สว่าง 100
 STEM_V_MAX = 255
@@ -174,26 +203,31 @@ RESCUE_MIN_AREA_PX        = 800        # ปรับตามความละ
 
 ENABLE_SIDE_STEM_RESCUE = True    #add v to connect side-view
 SIDE_V_METHOD = "fixed"   # "fixed" | "otsu" | "percentile"
-SIDE_V_MIN = 180           # 35 = dark, 150 = light
+SIDE_V_MIN = 150           # 35 = dark, 150 = light
 SIDE_V_MAX = 255
-POT_ID = 4
+#POT_ID = 4
+
 # -------------------------------------------------
 # SIDE view parameters (rectangle ROI)
+SIDE_CROP_ENABLE = False         # เปิด/ปิดการครอปรูปก่อนหา ROI
+SIDE_CROP_RECT   = (500, 250, 3000, 2000)  # (x, y, w, h)
+SIDE_ROI_MODE = "manual"      # mode : "auto" | "manual"
 USE_FULL_IMAGE_ROI = False
-#ROI_X, ROI_Y, ROI_W, ROI_H = 100, 100, 240, 240
-MIN_PLANT_AREA = 15000
+ROI_X, ROI_Y, ROI_W, ROI_H = 1500, 1200, 800, 1750
+SIDE_TOUCH_RECT = (ROI_X, ROI_Y, ROI_W, ROI_H)
+MIN_PLANT_AREA = 1000
 SIDE_MERGE_GAP = 0
 SIDE_EXPECT_N_MIN = 3
 SIDE_EXPECT_N_MAX = 20
 SIDE_BRIDGE_GAP_X = 5
-SIDE_BRIDGE_GAP_Y = 20
+SIDE_BRIDGE_GAP_Y = 10
 
 # -------------------------------------------------
 # Calibration scale
 CHECKER_SQUARE_MM = 12.0 # Size of one square in checkerboard (mm)
 RECT_SIZE_MM = (48, 48) # (w, h) ของสี่เหลี่ยมอ้างอิงจริง (mm)
 CHECKER_PATTERN = (3, 3)
-FALLBACK_MM_PER_PX = 48.0 /340.0
+FALLBACK_MM_PER_PX = 48.0 / 465.0
 
 # -------------------------------------------------
 # Mask scoring weights

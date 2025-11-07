@@ -7,7 +7,7 @@ from . import config as cfg
 from .io_utils import safe_readimage
 from .masking import clean_mask, ensure_binary, get_initial_mask
 from .roi_top import make_grid_rois
-from .roi_side import make_side_roi ,make_side_rois_auto
+from .roi_side import make_side_roi ,make_side_rois_auto, make_side_roi_partial
 from .analyze_top import analyze_one_top, add_global_density_and_color, combine_top_overlays, save_top_overlay
 from .analyze_side import analyze_one_side, get_side_legend, combine_side_overlays, save_side_overlay
 from .calibration import get_scale
@@ -119,7 +119,7 @@ def run_one_image(rgb_img, filename):
     _dbg("DEBUG mask_closed:", mask_closed.dtype, np.unique(mask_closed)[:5])
 
     mask_fill = pcv.fill(bin_img=mask_closed, size=300)
-    mask_fill = clean_mask(mask_fill, close_ksize=5, min_obj_size=3000)
+    mask_fill = clean_mask(mask_fill, close_ksize=5, min_obj_size=1000)
     mask_fill = ensure_binary(mask_fill)
     _dbg("DEBUG mask_fill:", mask_fill.dtype, np.unique(mask_fill)[:5])
 
@@ -590,14 +590,18 @@ def run_one_image(rgb_img, filename):
     
     else:  # side
         #crop
-        crop_img = pcv.crop(img=rgb_img, x=300, y=0, h=1750, w=3140)
-        crop_mask = pcv.crop(img=mask_fill, x=300, y=0, h=1750, w=3140)
-        crop_img_rgb = cv2.cvtColor(crop_img, cv2.COLOR_BGR2RGB)
+        if getattr(cfg, "SIDE_CROP_ENABLE", False):
+            cx, cy, cw, ch = getattr(cfg, "SIDE_CROP_RECT", (500, 250, 3000, 2000))
+            crop_img  = pcv.crop(img=rgb_img,  x=int(cx), y=int(cy), w=int(cw), h=int(ch))
+            crop_mask = pcv.crop(img=mask_fill, x=int(cx), y=int(cy), w=int(cw), h=int(ch))
+        else:
+            crop_img  = rgb_img
+            crop_mask = mask_fill
         # === STEM RESCUE (SIDE) ด้วย V-channel ก่อนแยก ROI ===
         if getattr(cfg, "ENABLE_SIDE_STEM_RESCUE", True):
             crop_mask_before = ensure_binary(crop_mask)
             crop_mask, dbg_side = add_v_connected_to_a(
-                rgb=crop_img_rgb,
+                rgb=crop_img,
                 base_a_mask=crop_mask_before,
                 method=getattr(cfg, "SIDE_V_METHOD", "fixed"),   # "fixed" | "otsu" | "percentile"
                 v_min=getattr(cfg, "SIDE_V_MIN", 150),
@@ -626,23 +630,57 @@ def run_one_image(rgb_img, filename):
             if "v_connected" in dbg_side:
                 cv2.imwrite(str(Path(base) / "processed" / f"{stub}_sideV_vconnected.png"), dbg_side["v_connected"])
         
-        # หา ROI อัตโนมัติหลายต้น + ดีบัคภาพรวม
-        rois = make_side_rois_auto(
-            rgb_img=crop_img,
-            mask_fill=crop_mask,
-            min_area_px=getattr(cfg, "MIN_PLANT_AREA", 800),
-            merge_gap_px=getattr(cfg, "SIDE_MERGE_GAP", 200),
-            debug_out_path=str((Path(getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or ".") 
-                               / "processed" / f"{Path(filename).stem}_side_rois.png"))
-        )
-        if not rois:
-            slot_mask, (x, y, w, h) = make_side_roi(
-                crop_img, crop_mask, cfg.USE_FULL_IMAGE_ROI,
-                cfg.ROI_X, cfg.ROI_Y, cfg.ROI_W, cfg.ROI_H
+        mode = str(getattr(cfg, "SIDE_ROI_MODE", "auto")).lower()
+        
+        rois = []
+        if mode == "auto":
+            # หา ROI อัตโนมัติหลายต้น + ดีบัคภาพรวม
+            rois = make_side_rois_auto( 
+                rgb_img=crop_img,
+                mask_fill=crop_mask,
+                min_area_px=getattr(cfg, "MIN_PLANT_AREA", 800),
+                merge_gap_px=getattr(cfg, "SIDE_MERGE_GAP", 200),
+                debug_out_path=str((Path(getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or ".") 
+                                / "processed" / f"{Path(filename).stem}_side_rois.png"))
             )
-            slot_mask = ensure_binary(slot_mask)
-            if cv2.countNonZero(slot_mask) > 0:
-                rois = [{"idx": 1, "bbox": (x, y, w, h), "comp_mask": slot_mask}]
+            if not rois:
+                slot_mask, (x, y, w, h) = make_side_roi(
+                    crop_img, crop_mask, cfg.USE_FULL_IMAGE_ROI,
+                    cfg.ROI_X, cfg.ROI_Y, cfg.ROI_W, cfg.ROI_H
+                )
+                slot_mask = ensure_binary(slot_mask)
+                if cv2.countNonZero(slot_mask) > 0:
+                    rois = [{"idx": 1, "bbox": (x, y, w, h), "comp_mask": slot_mask}]
+                    
+        elif mode == "manual":
+            # 1) กำหนด ROI ที่จะใช้ partial
+            rx, ry, rw, rh = getattr(cfg, "SIDE_TOUCH_RECT",
+                                    getattr(cfg, "SIDE_CROP_RECT",
+                                            (0, 0, crop_img.shape[1], crop_img.shape[0])))
+
+            # (ถ้า SIDE_CROP_ENABLE=True และ SIDE_TOUCH_RECT เป็นพิกัดบนภาพเต็ม
+            # ให้ลบ offset (cx,cy) ออกก่อน แล้ว clamp ให้อยู่ในกรอบครอป)
+            if getattr(cfg, "SIDE_CROP_ENABLE", False) and getattr(cfg, "SIDE_TOUCH_IS_FULLCOORD", False):
+                cx, cy, cw, ch = getattr(cfg, "SIDE_CROP_RECT")
+                rx, ry = rx - cx, ry - cy
+                rx = max(0, min(rx, cw-1)); ry = max(0, min(ry, ch-1))
+                rw = max(1, min(rw, cw - rx)); rh = max(1, min(rh, ch - ry))
+
+            # 2) เรียก partial: ถ้าแตะ ROI บางส่วน -> ได้ "ทั้งก้อน" กลับมาเป็นลิสต์ rois
+            out_dir = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
+            debug_path = str(Path(out_dir) / "processed" / f"{Path(filename).stem}_side_partial.png")
+
+            rois, _roi_rect = make_side_roi_partial(
+                rgb_img=crop_img,
+                mask_fill=crop_mask,
+                ROI_X=int(rx), ROI_Y=int(ry), ROI_W=int(rw), ROI_H=int(rh),
+                min_area_px=getattr(cfg, "MIN_PLANT_AREA", 2000),
+                debug_path=debug_path,
+                min_overlap=getattr(cfg, "SIDE_PARTIAL_MIN_OVERLAP", 0.1)
+            )
+
+            if not rois:
+                raise RuntimeError("No objects detected for side view (manual-partial).")
 
         if not rois:
             raise RuntimeError("No objects detected for side view.")
