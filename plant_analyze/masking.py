@@ -450,6 +450,10 @@ def _mask_from_spec(rgb_img, spec: dict):
         t, m_guard = auto_thresh_lab_a_otsu_guard(
             rgb_img,
             object_type=spec.get("object_type", "dark"),
+            
+            thresh_method=spec.get("thresh_method", "fixed"),
+            thresh_val=spec.get("thresh_val", 120),
+            
             v_bg=spec.get("v_bg", 45),
             s_min=spec.get("s_min", 30),
             v_shadow_max=spec.get("v_shadow_max", 115),
@@ -457,6 +461,9 @@ def _mask_from_spec(rgb_img, spec: dict):
             use_bottom_roi=True,
             bottom_roi_ratio=spec.get("bottom_roi_ratio", 0.80),
             min_cc_area=spec.get("min_cc_area", 200),
+            
+            s_min_green=spec.get("s_min_green", 50),
+            v_min_green=spec.get("v_min_green", 0),
             )
         m = ensure_binary(m_guard, normalize_orientation=True)
 

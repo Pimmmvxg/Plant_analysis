@@ -207,5 +207,9 @@ def create_roi_top_partial(
         cv2.putText(dbg, f"A={int(area)} ov={overlap_ratio:.2f}",
                     (x_, max(0, y_ - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                     (0, 255, 0), 2, cv2.LINE_AA)
+        
+    if debug_path:
+        cv2.imwrite(debug_path, dbg)
+    return out_rois, roi_rect
     
 

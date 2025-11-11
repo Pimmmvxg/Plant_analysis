@@ -6,7 +6,7 @@ from plantcv import plantcv as pcv
 from . import config as cfg
 from .io_utils import safe_readimage
 from .masking import clean_mask, ensure_binary, get_initial_mask
-from .roi_top import make_grid_rois
+from .roi_top import make_grid_rois, create_roi_top_partial
 from .roi_side import make_side_roi ,make_side_rois_auto, make_side_roi_partial
 from .analyze_top import analyze_one_top, add_global_density_and_color, combine_top_overlays, save_top_overlay
 from .analyze_side import analyze_one_side, get_side_legend, combine_side_overlays, save_side_overlay
@@ -88,7 +88,7 @@ def run_one_image(rgb_img, filename):
         ('auto_method', info.get('method'), 'text', str),
         ('auto_object_type', info.get('object_type'), 'text', str),
         ('auto_ksize', str(info.get('ksize')), 'text', str),
-        #('auto_area_ratio', float(info.get('area_ratio', 0.0)), 'ratio', float),
+        #('auto_area_ratio', float(info.get('area_ratio, 0.0)), 'ratio', float),
         ('auto_n_components', int(info.get('n_components', 0)), 'count', int),
         #('auto_solidity', float(info.get('solidity', 0.0)), 'ratio', float),
         ('auto_height_px', int(info.get('Height_shape', H)), 'length', int),
@@ -182,7 +182,9 @@ def run_one_image(rgb_img, filename):
     #Top view
     if cfg.VIEW == "top":
         _dbg("DEBUG entering TOP pipeline")
-        if getattr(cfg, "TOP_ROI_MODE", "grid") == "auto":
+        mode = getattr(cfg, "TOP_ROI_MODE", "auto")
+        
+        if mode == "auto":
             # ---- โหมด auto ----
             from .roi_top import make_top_rois_auto
             rois = make_top_rois_auto(
@@ -329,41 +331,40 @@ def run_one_image(rgb_img, filename):
                         full_mask[y:y+h, x:x+w] = sub_mask
                         combined_masks.append(full_mask)
                         combined_labels.append(f"{sample}_union")
-
-                else:  # "per_roi"
-                    # log area_px + area_mm2 ต่อ ROI
-                    area_px = int(cv2.countNonZero(sub_mask))
-                    if area_px < getattr(cfg, "MIN_PLANT_AREA", 2000):
-                        return        
-                    pcv.outputs.add_observation(
-                        sample=f"{sample}",
-                        variable="area_px",
-                        trait="area", method="countNonZero",
-                        scale="px", datatype=int, value=area_px, label="area_px"
-                    )
-                    mm2 = _area_mm2_from_px(area_px)   # ใช้ helper ฟังก์ชันในไฟล์เดียวกัน
-                    if mm2 is not None:
+                    else:  # "per_roi"
+                        # log area_px + area_mm2 ต่อ ROI
+                        area_px = int(cv2.countNonZero(sub_mask))
+                        if area_px < getattr(cfg, "MIN_PLANT_AREA", 2000):
+                            return        
                         pcv.outputs.add_observation(
                             sample=f"{sample}",
-                            variable="area_mm2",
-                            trait="area", method="px_to_mm2",
-                            scale="mm2", datatype=float, value=float(mm2), label="area_mm2"
+                            variable="area_px",
+                            trait="area", method="countNonZero",
+                            scale="px", datatype=int, value=area_px, label="area_px"
                         )
+                        mm2 = _area_mm2_from_px(area_px)   # ใช้ helper ฟังก์ชันในไฟล์เดียวกัน
+                        if mm2 is not None:
+                            pcv.outputs.add_observation(
+                                sample=f"{sample}",
+                                variable="area_mm2",
+                                trait="area", method="px_to_mm2",
+                                scale="mm2", datatype=float, value=float(mm2), label="area_mm2"
+                            )
 
-                    # เซฟ overlay เป็นทั้ง ROI เหมือนเดิม
-                    save_top_overlay(
-                        rgb_img=sub_img,
-                        slot_mask=sub_mask,
-                        contours=None,
-                        eff_r=eff_r,
-                        sample_name=f"{sample}",
-                        mm_per_px=getattr(cfg, "MM_PER_PX", None),
-                        slot_label=f"{sample}"
-                    )
-                    full_mask = np.zeros(mask_fill.shape[:2], dtype=np.uint8)
-                    full_mask[y:y+h, x:x+w] = sub_mask
-                    combined_masks.append(full_mask)
-                    combined_labels.append(f"{sample}")
+                        # เซฟ overlay เป็นทั้ง ROI เหมือนเดิม
+                        save_top_overlay(
+                            rgb_img=sub_img,
+                            slot_mask=sub_mask,
+                            contours=None,
+                            eff_r=eff_r,
+                            sample_name=f"{sample}",
+                            mm_per_px=getattr(cfg, "MM_PER_PX", None),
+                            slot_label=f"{sample}"
+                        )
+                        full_mask = np.zeros(mask_fill.shape[:2], dtype=np.uint8)
+                        full_mask[y:y+h, x:x+w] = sub_mask
+                        combined_masks.append(full_mask)
+                        combined_labels.append(f"{sample}")
 
             for r in rois:
                 process_top_auto(r)
@@ -385,20 +386,111 @@ def run_one_image(rgb_img, filename):
                 "roi_mode": "auto",
                 "n_top_rois": int(len(rois)),
             }
-            return extra, ensure_binary(union_mask)
+            return extra, ensure_binary(union_mask)    
+        
+        elif mode == "manual": 
+                    combined_masks = []
+                    combined_labels = []
+                    
+                    rx = getattr(cfg, "TOP_ROI_X", None)
+                    ry = getattr(cfg, "TOP_ROI_Y", None)
+                    rw = getattr(cfg, "TOP_ROI_W", None)
+                    rh = getattr(cfg, "TOP_ROI_H", None)
+                    
+                    rois, (rx, ry, rw, rh) = create_roi_top_partial(
+                        rgb_img=rgb_img,
+                        mask_fill=mask_fill,
+                        ROI_X=int(rx), ROI_Y=int(ry), ROI_W=int(rw), ROI_H=int(rh),
+                        debug_path=str((Path(getattr(cfg, "OUTPUT_DIR", ".") / "processed" / f"{sample_name}_top_partial.png")))
+                    )
+                    
+                    if not rois:
+                        raise RuntimeError("No ROI created in top_partial mode.")
+                    
+                    union_mask = np.zeros_like(mask_fill, dtype=np.uint8)
+                    for r in rois:
+                        union_mask = cv2.bitwise_or(union_mask, r["comp_mask"])
+                    
+                    union_mask = ensure_binary(union_mask)
+                    if cv2.countNonZero(union_mask) == 0:
+                        raise RuntimeError("No objects detected in top_partial ROI.")
+                    
+                    contours, _ = cv2.findContours(union_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    if not contours:
+                        raise RuntimeError("No contours found in union mask for top_partial.")
+                    
+                    all_points = np.concatenate(contours)
+                    x, y, w, h = cv2.boundingRect(all_points)
+                    
+                    sub_img = rgb_img[y:y+h, x:x+w].copy()
+                    union_mask_cropped = union_mask[y:y+h, x:x+w].copy()
+                        
+                    sample = "top_partial_merged"
+                    eff_r = int(max(4, round(0.45 * min(w, h))))
+                    
+                    with _global_lock:
+                        analyze_one_top(union_mask_cropped, sample, eff_r, sub_img)
+                        
+                    area_px = int(cv2.countNonZero(union_mask_cropped))
+                    pcv.outputs.add_observation(
+                        sample=f"{sample}",
+                        variable="area_px",
+                        trait="area", method="countNonZero(union)",
+                        scale="px", datatype=int, value=area_px, label="area_px"
+                    )
+                    mm2 = _area_mm2_from_px(area_px)
+                    if mm2 is not None:
+                        pcv.outputs.add_observation(
+                            sample=f"{sample}",
+                            variable="area_mm2",
+                            trait="area", method="px_to_mm2",
+                            scale="mm2", datatype=float, value=float(mm2_total), label="area_mm2"
+                        )
+                    
+                    save_top_overlay(
+                        rgb_img=sub_img,
+                        slot_mask=union_mask_cropped,
+                        contours=None,
+                        eff_r=eff_r,
+                        sample_name=f"{sample}",
+                        mm_per_px=getattr(cfg, "MM_PER_PX", None),
+                        slot_label=f"{sample}"
+                    )
+                    
+                    if cv2.countNonZero(union_mask) > 0:
+                        combined_masks.append(union_mask)
+                        #combined_labels.append(sample)
+                    
+                    # เรียกใช้ combine_top_overlays (เหมือนโหมด auto/grid)
+                    if combined_masks:
+                        base = getattr(cfg, "OUTPUT_DIR", None) or pcv.params.debug_outdir or "."
+                        (Path(base) / "processed").mkdir(parents=True, exist_ok=True)
+                        combine_top_overlays(
+                            rgb_img=rgb_img,
+                            slot_masks=combined_masks,
+                            labels=combined_labels,
+                            eff_r=None,  
+                            mm_per_px=getattr(cfg, "MM_PER_PX", None),
+                            out_path=str(Path(base) / "processed" / "ALL_in_one_overlay.png"),
+                        )
+                    
+                    extra = {
+                        "filename": filename,
+                        "view": "top",
+                        "roi_mode": "manual",
+                        "n_top_rois": int(len(rois)),
+                    }
+                    return extra, ensure_binary(union_mask)
 
         else:
             # ---- โหมด grid (ของเดิม) ----
-            rois, eff_r = make_grid_rois(
-                rgb_img, cfg.ROWS, cfg.COLS, getattr(cfg, "ROI_RADIUS", None)
-            )
-        try:
-            rois, eff_r = make_grid_rois(
-                rgb_img, cfg.ROWS, cfg.COLS, getattr(cfg, "ROI_RADIUS", None)
-            )
-        except Exception as e:
-            raise RuntimeError(f"make_grid_rois failed: {e}")
-        _dbg("DEBUG rois:", len(rois), "eff_r:", eff_r)
+            try:
+                rois, eff_r = make_grid_rois(
+                    rgb_img, cfg.ROWS, cfg.COLS, getattr(cfg, "ROI_RADIUS", None)
+                )
+            except Exception as e:
+                raise RuntimeError(f"make_grid_rois failed: {e}")
+            _dbg("DEBUG rois:", len(rois), "eff_r:", eff_r)
 
         # (optional) เซฟ overlay
         overlay = rgb_img.copy()
@@ -778,7 +870,9 @@ def process_one(path: Path, out_dir: Path):
             flat["Pot_id"] = str(pot_val)
     
     area_values = [v for k, v in flat.items() 
-                   if isinstance(v, (int, float)) and "area_sum_mm2" in k and not str(k).startswith("default")]
+                   if isinstance(v, (int, float)) 
+                   and "area_mm2" in k 
+                   and k not in ("plant_area_mm2", "auto_height_mm", "auto_width_mm")]
 
     if area_values:
         avg_area = float(np.mean(area_values))
@@ -801,14 +895,13 @@ def process_one(path: Path, out_dir: Path):
         with open(out_json, 'w', encoding='utf-8') as f:
             json.dump(flat, f, ensure_ascii=False, indent=2)'''
     if getattr(cfg, "ENABLE_THINGSBOARD", False):
-        # ส่งข้อมูลขึ้น ThingsBoard
         try:
             publish_data(out_json)
             print(f"Published data from {out_json} to ThingsBoard.")
         except Exception as e:
             print(f"Failed to publish data from {out_json} to ThingsBoard: {e}")
-        return str(out_json)
-    
+    return str(out_json)  # ย้ายออกมา
+
 # ฟังก์ชันสำหรับประมวลผลหลายไฟล์ด้วย multiprocessing
 def process_multiple(paths, out_dir):
     out_dir = Path(out_dir)

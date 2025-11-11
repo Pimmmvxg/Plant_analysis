@@ -3,6 +3,8 @@ import cv2, numpy as np
 def auto_thresh_lab_a_otsu_guard(
         rgb_img,
         object_type="dark",
+        thresh_method="fixed",  # "otsu" หรือ "fixed"
+        thresh_val=150,      # ใช้เมื่อ method="fixed"
         # 1) คัดพื้นหลังดำคร่าว ๆ
         v_bg=51,                 # กันฉากดำ/มืด
         blur_ksize=3,
@@ -18,7 +20,10 @@ def auto_thresh_lab_a_otsu_guard(
         # 5) ทำความสะอาด
         min_cc_area=200,         # พื้นที่ขั้นต่ำ
         open_ksize=3,
-        close_ksize=8
+        close_ksize=8,
+        
+        s_min_green=10,
+        v_min_green=45,
     ):
     H, W, _ = rgb_img.shape
 
@@ -33,19 +38,24 @@ def auto_thresh_lab_a_otsu_guard(
 
     # === คัดพื้นหลังดำออกคร่าว ๆ (foreground candidate) ===
     fg = (Vv >= v_bg)
+    s_prefilter = (Ss >= s_min)
+    combined_filter = fg & s_prefilter
 
-    # === คำนวณ Otsu บน a-channel เฉพาะ fg ===
-    a_fg = Aa[fg]
-    if a_fg.size < 100:
-        return 123, np.zeros((H, W), np.uint8)
+    if thresh_method == "side_auto":
+        # === คำนวณ Otsu บน a-channel เฉพาะ fg ===
+        a_fg = Aa[combined_filter]
+        if a_fg.size < 100:
+            return 123, np.zeros((H, W), np.uint8)
 
-    hist, _ = np.histogram(a_fg, bins=256, range=(0,255))
-    p = hist.astype(np.float64); p /= (p.sum() + 1e-12)
-    omega = np.cumsum(p)
-    mu = np.cumsum(p * np.arange(256))
-    mu_t = mu[-1]
-    sigma_b2 = (mu_t*omega - mu)**2 / (omega*(1.0-omega) + 1e-12)
-    t = int(np.nanargmax(sigma_b2))
+        hist, _ = np.histogram(a_fg, bins=256, range=(0,255))
+        p = hist.astype(np.float64); p /= (p.sum() + 1e-12)
+        omega = np.cumsum(p)
+        mu = np.cumsum(p * np.arange(256))
+        mu_t = mu[-1]
+        sigma_b2 = (mu_t*omega - mu)**2 / (omega*(1.0-omega) + 1e-12)
+        t = int(np.nanargmax(sigma_b2))
+    else: # method == "fixed"
+        t = thresh_val
 
     mask = (Aa <= t) if object_type=="dark" else (Aa >= t)
     mask &= fg

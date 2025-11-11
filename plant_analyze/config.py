@@ -111,7 +111,7 @@ def resolve_runtime(input_path: str | Path,
             "threshold": 123,
             "object_type": "dark",
         }
-        '''
+        
         MASK_SPEC = {
             "channel": "lab_a",
             "method": "side_auto",  # ใช้ auto + guard
@@ -123,12 +123,14 @@ def resolve_runtime(input_path: str | Path,
             "bottom_roi_ratio": 0.60,
             "min_cc_area": 200,
         }
-        '''
         
+        '''
         MASK_SPEC = {
             "channel": "lab_a",
             "method": "side_auto",  # ใช้ auto + guard
             "object_type": "dark",
+            "thresh_method": "fixed",
+            "thresh_val": 120,
             
             "v_bg": 51,
             "s_min": 39,
@@ -144,7 +146,7 @@ def resolve_runtime(input_path: str | Path,
             "open_ksize": 3,
             "close_ksize": 8,
         }
-        '''        
+                
     elif VIEW == "top":
         '''
         MASK_SPEC = {
@@ -159,23 +161,36 @@ def resolve_runtime(input_path: str | Path,
             "channel": "lab_a",
             "method": "side_auto",  # ใช้ auto + guard
             "object_type": "dark",
+            "thresh_method": "fixed",
             "s_min": 30,
             "v_bg": 45,
             "v_shadow_max": 115,
             "green_h": (35, 95),
             "bottom_roi_ratio": 0.60,
             "min_cc_area": 200,
+            "open_ksize": 5,
+            "s_min_green": 10,
+            "v_min_green": 45,
         }
+        '''
+        MASK_SPEC = {
+            "channel": "lab_a",
+            "method": "binary",
+            "threshold": 120,
+            "object_type": "dark",
+        }
+        '''
     else:
         MASK_SPEC = None  
 
 
 # TOP view parameters
-TOP_ROI_MODE = "auto"               # grid |auto
+TOP_ROI_MODE = "manual"               # grid |auto | manual
 TOP_SUMMARY_MODE = "per_object"     # per_object | per roi
 TOP_MIN_PLANT_AREA = 4000      
 TOP_MERGE_GAP = 0             # px; มาก = รวมง่าย
 TOP_CLOSE_ITERS = 0            # ปิดรูเล็ก ๆ ก่อนจับกล่อง
+TOP_ROI_X, TOP_ROI_Y, TOP_ROI_W, TOP_ROI_H = 1500, 750, 1000, 1000
 
 STEM_CONNECT_MODE = "cc_touch"
 STEM_CC_CLOSE_K   = 3
@@ -188,9 +203,9 @@ TOP_EXPECT_N_MAX = 10
 
 # ---------- STEM RESCUE (TOP view) ----------
 #add v to connect top-view
-ENABLE_STEM_RESCUE        = False   # เปิด/ปิดฟีเจอร์กู้ก้าน
+ENABLE_STEM_RESCUE        = True   # เปิด/ปิดฟีเจอร์กู้ก้าน
 STEM_V_METHOD = "fixed"            # "fixed"|"otsu"|"percentile"
-STEM_V_MIN = 165                    # มืด 50 / สว่าง 100
+STEM_V_MIN = 160                    # มืด 50 / สว่าง 100
 STEM_V_MAX = 255
 RESCUE_B_OTSU_FALLBACK    = 135
 RESCUE_L_MIN_FOR_STEM     = 120
