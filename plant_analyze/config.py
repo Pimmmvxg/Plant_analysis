@@ -143,7 +143,7 @@ def resolve_runtime(input_path: str | Path,
             "bottom_roi_ratio": 1.00,
             "min_cc_area": 200,
             "blur_ksize": 3,
-            "open_ksize": 3,
+            "open_ksize": 5,
             "close_ksize": 8,
         }
                 
@@ -205,7 +205,7 @@ TOP_EXPECT_N_MAX = 10
 #add v to connect top-view
 ENABLE_STEM_RESCUE        = True   # เปิด/ปิดฟีเจอร์กู้ก้าน
 STEM_V_METHOD = "fixed"            # "fixed"|"otsu"|"percentile"
-STEM_V_MIN = 160                    # มืด 50 / สว่าง 100
+STEM_V_MIN = 150                    # มืด 50 / สว่าง 100
 STEM_V_MAX = 255
 RESCUE_B_OTSU_FALLBACK    = 135
 RESCUE_L_MIN_FOR_STEM     = 120
@@ -215,11 +215,6 @@ RESCUE_HUE_YELLOW         = (15, 45)   # OpenCV H: 0–179
 RESCUE_GEO_ITERS          = 40
 RESCUE_VERT_DILATE_K      = 9
 RESCUE_MIN_AREA_PX        = 800        # ปรับตามความละเอียดภาพ
-
-ENABLE_SIDE_STEM_RESCUE = True    #add v to connect side-view
-SIDE_V_METHOD = "fixed"   # "fixed" | "otsu" | "percentile"
-SIDE_V_MIN = 150           # 35 = dark, 150 = light
-SIDE_V_MAX = 255
 #POT_ID = 4
 
 # -------------------------------------------------
@@ -228,14 +223,19 @@ SIDE_CROP_ENABLE = False         # เปิด/ปิดการครอป�
 SIDE_CROP_RECT   = (500, 250, 3000, 2000)  # (x, y, w, h)
 SIDE_ROI_MODE = "manual"      # mode : "auto" | "manual"
 USE_FULL_IMAGE_ROI = False
-ROI_X, ROI_Y, ROI_W, ROI_H = 1500, 1200, 800, 1750
+ROI_X, ROI_Y, ROI_W, ROI_H = 1650, 1000, 800, 1100
 SIDE_TOUCH_RECT = (ROI_X, ROI_Y, ROI_W, ROI_H)
 MIN_PLANT_AREA = 1000
-SIDE_MERGE_GAP = 0
+SIDE_MERGE_GAP = 10
 SIDE_EXPECT_N_MIN = 3
 SIDE_EXPECT_N_MAX = 20
-SIDE_BRIDGE_GAP_X = 5
-SIDE_BRIDGE_GAP_Y = 10
+SIDE_BRIDGE_GAP_X = 10
+SIDE_BRIDGE_GAP_Y = 20
+
+ENABLE_SIDE_STEM_RESCUE = True  #เปิด/ปิดการกู้ลำต้นสำหรับ Side-view
+SIDE_V_METHOD = "fixed"            # "fixed"|"otsu"|"percentile"
+SIDE_V_MIN = 90                    # มืด 50 / สว่าง 100
+SIDE_V_MAX = 255
 
 # -------------------------------------------------
 # Calibration scale
@@ -243,6 +243,22 @@ CHECKER_SQUARE_MM = 12.0 # Size of one square in checkerboard (mm)
 RECT_SIZE_MM = (48, 48) # (w, h) ของสี่เหลี่ยมอ้างอิงจริง (mm)
 CHECKER_PATTERN = (3, 3)
 FALLBACK_MM_PER_PX = 48.0 / 465.0
+
+# -------------------------------------------------
+# Measurement parameters side view
+DEFAULT_CALIBRATION_OBJECT_DISTANCE_MM = 450.0  # mm
+DEFAULT_PLANT_DISTANCE_MM = 330.0  # mm
+
+#Distance map based on filename
+SIDE_DISTANCE_MAP = {
+    "_A_": (450.0, 330.0), # (Ref: 45cm, Plant: 33cm)
+    "_B_": (450.0, 330.0),
+    "_C_": (450.0, 330.0),
+    
+    "_D_": (450.0, 120.0), # (Ref: 45cm, Plant: 12cm)
+    "_E_": (450.0, 120.0),
+    "_F_": (450.0, 120.0)
+}
 
 # -------------------------------------------------
 # Mask scoring weights

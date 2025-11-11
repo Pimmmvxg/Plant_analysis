@@ -50,6 +50,10 @@ def run_one_image(rgb_img, filename):
     )
 
     # 1) กระจายผลให้ทั้ง pipeline ใช้ร่วมกัน
+    #scale อ้างอิง (mm/px ที่ระยะของreference object)
+    setattr(cfg, "REF_MM_PER_PX", float(scale))
+    
+    #top-view
     setattr(cfg, "MM_PER_PX", float(scale))
     _LAST_MM_PER_PX = float(scale)
 
@@ -119,7 +123,7 @@ def run_one_image(rgb_img, filename):
     _dbg("DEBUG mask_closed:", mask_closed.dtype, np.unique(mask_closed)[:5])
 
     mask_fill = pcv.fill(bin_img=mask_closed, size=300)
-    mask_fill = clean_mask(mask_fill, close_ksize=5, min_obj_size=1000)
+    mask_fill = clean_mask(mask_fill, close_ksize=5, min_obj_size=400)
     mask_fill = ensure_binary(mask_fill)
     _dbg("DEBUG mask_fill:", mask_fill.dtype, np.unique(mask_fill)[:5])
 
@@ -681,6 +685,63 @@ def run_one_image(rgb_img, filename):
         return extra, union_mask
     
     else:  # side
+        #คำนวณสเกลตามระยะ
+        try:
+            ref_scale_val = float(getattr(cfg, "REF_MM_PER_PX", _LAST_MM_PER_PX))
+            
+            default_ref_dist = float(getattr(cfg, "DEFAULT_CALIBRATION_OBJECT_DISTANCE_MM", 0.0))
+            default_plant_dist = float(getattr(cfg, "DEFAULT_PLANT_DISTANCE_MM", 0.0))
+            
+            distance_map = getattr(cfg, "SIDE_DISTANCE_MAP", {})
+            
+            ref_dist_val = default_ref_dist
+            plant_dist_val = default_plant_dist
+            found_map = False
+            
+            fname_str = str(filename)
+            
+            for key, (map_ref, map_plant) in distance_map.items():
+                if key in fname_str:
+                    ref_dist_val = float(map_ref)
+                    plant_dist_val = float(map_plant)
+                    found_map = True
+                    break
+            
+            if ref_scale_val > 0 and ref_dist_val > 0 and plant_dist_val > 0:
+                #    Scale_Plant = Scale_Ref * (Dist_Plant / Dist_Ref)
+                corrected_scale = ref_scale_val * (plant_dist_val / ref_dist_val)
+                
+                setattr(cfg, "MM_PER_PX", corrected_scale)
+                
+                pcv.outputs.add_observation(
+                    sample="default", variable="corrected_mm_per_px_side",
+                    trait="scale", method="dynamic_perspective_correction", scale="mm/px",
+                    datatype=float, value=float(corrected_scale), label="corrected_mm_per_px_side"
+                )
+                pcv.outputs.add_observation(
+                    sample="default", variable="ref_dist_mm",
+                    trait="distance", method="dynamic_map" if found_map else "default_config", scale="mm",
+                    datatype=float, value=float(ref_dist_val), label="ref_dist_mm"
+                )
+                pcv.outputs.add_observation(
+                    sample="default", variable="plant_dist_mm",
+                    trait="distance", method="dynamic_map" if found_map else "default_config", scale="mm",
+                    datatype=float, value=float(plant_dist_val), label="plant_dist_mm"
+                )
+                
+            else:
+                setattr(cfg, "MM_PER_PX", float(ref_scale_val))
+                pcv.outputs.add_observation(
+                    sample="default", variable="corrected_mm_per_px_side",
+                    trait="scale", method="fallback_no_perspective", scale="mm/px",
+                    datatype=float, value=float(ref_scale_val), label="corrected_mm_per_px_side"
+                )
+        except Exception as e:
+            print("WARN: using default scale, side view scale calculation failed:", e)   
+            #Fallback
+            if _LAST_MM_PER_PX:
+                setattr(cfg, "MM_PER_PX", float(_LAST_MM_PER_PX))
+            
         #crop
         if getattr(cfg, "SIDE_CROP_ENABLE", False):
             cx, cy, cw, ch = getattr(cfg, "SIDE_CROP_RECT", (500, 250, 3000, 2000))
