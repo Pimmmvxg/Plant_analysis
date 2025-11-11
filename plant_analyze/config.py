@@ -223,26 +223,27 @@ SIDE_CROP_ENABLE = False         # เปิด/ปิดการครอป�
 SIDE_CROP_RECT   = (500, 250, 3000, 2000)  # (x, y, w, h)
 SIDE_ROI_MODE = "manual"      # mode : "auto" | "manual"
 USE_FULL_IMAGE_ROI = False
-ROI_X, ROI_Y, ROI_W, ROI_H = 1650, 1000, 800, 1100
+ROI_X, ROI_Y, ROI_W, ROI_H = 1650, 1000, 800, 1000
 SIDE_TOUCH_RECT = (ROI_X, ROI_Y, ROI_W, ROI_H)
 MIN_PLANT_AREA = 1000
 SIDE_MERGE_GAP = 10
 SIDE_EXPECT_N_MIN = 3
 SIDE_EXPECT_N_MAX = 20
 SIDE_BRIDGE_GAP_X = 10
-SIDE_BRIDGE_GAP_Y = 20
+SIDE_BRIDGE_GAP_Y = 10
 
 ENABLE_SIDE_STEM_RESCUE = True  #เปิด/ปิดการกู้ลำต้นสำหรับ Side-view
 SIDE_V_METHOD = "fixed"            # "fixed"|"otsu"|"percentile"
-SIDE_V_MIN = 90                    # มืด 50 / สว่าง 100
+SIDE_V_MIN = 150                    # มืด 50 / สว่าง 100
 SIDE_V_MAX = 255
+
 
 # -------------------------------------------------
 # Calibration scale
 CHECKER_SQUARE_MM = 12.0 # Size of one square in checkerboard (mm)
 RECT_SIZE_MM = (48, 48) # (w, h) ของสี่เหลี่ยมอ้างอิงจริง (mm)
 CHECKER_PATTERN = (3, 3)
-FALLBACK_MM_PER_PX = 48.0 / 465.0
+FALLBACK_MM_PER_PX = 48.0 / 645.0
 
 # -------------------------------------------------
 # Measurement parameters side view

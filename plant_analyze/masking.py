@@ -496,7 +496,7 @@ def _mask_from_spec(rgb_img, spec: dict):
         by = int(getattr(cfg, "SIDE_BRIDGE_GAP_Y", 200))
         if bx > 0 or by > 0:
             before_area = cv2.countNonZero(m)
-            m = connect_mask_holes(m, gap_x=bx, gap_y=by, iterations=1)
+            m = connect_mask_holes(m, gap_x=bx, gap_y=by, iterations=3)
             after_area = cv2.countNonZero(m)
             if getattr(cfg, "DEBUG_MODE", "none") == "print":
                 print(f"[bridge-spec] VIEW=side bx={bx} by={by} area {before_area}->{after_area}")

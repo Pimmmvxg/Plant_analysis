@@ -60,18 +60,27 @@ def add_v_connected_to_a(
 
     # ---------- 2) เชื่อมเฉพาะส่วนที่ ติดกับฐานเดิม(lab a) ----------
     if str(connect_mode).lower() == "cc_touch":
-        # โหมดใหม่: เก็บทั้งก้อน ของ vmask ที่แตะขอบฐาน (dilate ด้วย near_px)
+        # เก็บทั้งก้อน ของ vmask ที่แตะขอบฐาน (dilate ด้วย near_px)
         near = (base_a_mask > 0).astype(np.uint8)
         if near_px and int(near_px) > 0:
             knear = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(near_px), int(near_px)))
             near = cv2.dilate(near, knear, 1)
 
         vsrc = vmask.copy()
-        if cc_close_k and int(cc_close_k) > 1:
-            kcc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(cc_close_k), int(cc_close_k)))
-            vsrc = cv2.morphologyEx(vsrc, cv2.MORPH_CLOSE, kcc, iterations=1)
-
-        num, lbl, stats, _ = cv2.connectedComponentsWithStats((vsrc > 0).astype(np.uint8), connectivity=8)
+        try:
+            gap_x = int(1)
+            gap_y = int(1)
+            iters = 3
+            if gap_x > 0:
+                h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2* gap_x +1, 3))
+                vsrc = cv2.morphologyEx(vsrc, cv2.MORPH_CLOSE, h_kernel, iterations=iters)
+            if gap_y > 0:
+                v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 2* gap_y +1))
+                vsrc = cv2.morphologyEx(vsrc, cv2.MORPH_CLOSE, v_kernel, iterations=iters)
+        except Exception as e:
+            print(f"[stem-rescue] side-view bridge error: {e}")
+        num, lbl, stats, _ = cv2.connectedComponentsWithStats((vsrc>0).astype(np.uint8), 8)
+        
         keep = np.zeros_like(vsrc, np.uint8)
 
         if num > 1:
