@@ -14,6 +14,7 @@ def publish_data(json_path: str | Path,
                                   "top_6_color_name", "top_6_area_mm2",
                                   "top_7_color_name", "top_7_area_mm2",
                                   "top_8_color_name", "top_8_area_mm2",
+                                  "top_color_name", "top_area_mm2",
                                   "filename"
                                   ),
                  ):

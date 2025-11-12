@@ -126,31 +126,6 @@ def run_one_image(rgb_img, filename):
     mask_fill = clean_mask(mask_fill, close_ksize=5, min_obj_size=400)
     mask_fill = ensure_binary(mask_fill)
     _dbg("DEBUG mask_fill:", mask_fill.dtype, np.unique(mask_fill)[:5])
-
-    # --- ขนาดรวมทั้งภาพ (px) ---
-    plant_size = int(cv2.countNonZero(mask_fill))
-    pcv.outputs.add_observation(
-        sample='default', variable='plant_size',
-        trait='area', method='mask_pixel_count', scale='px',
-        datatype=int, value=plant_size, label='plant_size'
-    )
-
-    def _area_mm2_from_px(px_area: int):
-        if hasattr(cfg, "MM_PER_PX") and cfg.MM_PER_PX:
-            mm_per_px = float(cfg.MM_PER_PX)
-            return float(px_area) * (mm_per_px ** 2)
-        if hasattr(cfg, "DPI") and cfg.DPI:
-            px_per_mm = float(cfg.DPI) / 25.4
-            return float(px_area) / (px_per_mm ** 2)
-        return None
-
-    mm2_total = _area_mm2_from_px(plant_size)
-    if mm2_total is not None:
-        pcv.outputs.add_observation(
-            sample='default', variable='plant_area_mm2',
-            trait='area', method='px_to_mm2', scale='mm2',
-            datatype=float, value=float(mm2_total), label='plant_area_mm2'
-        )
     
     # ========= STEM RESCUE (เฉพาะ TOP) =========
     if str(getattr(cfg, "VIEW", "top")).lower() == "top" and getattr(cfg, "ENABLE_STEM_RESCUE", True):
@@ -183,6 +158,32 @@ def run_one_image(rgb_img, filename):
         cv2.imwrite(str(dbgdir / f"{stub}_leaf_after_stem.png"),  ensure_binary(mask_fill))
         cv2.imwrite(str(dbgdir / f"{stub}_vmask.png"), dbg["vmask"])
         cv2.imwrite(str(dbgdir / f"{stub}_v_connected.png"), dbg["v_connected"])
+        
+    # --- ขนาดรวมทั้งภาพ (px) ---
+    plant_size = int(cv2.countNonZero(mask_fill))
+    pcv.outputs.add_observation(
+        sample='default', variable='plant_size',
+        trait='area', method='mask_pixel_count', scale='px',
+        datatype=int, value=plant_size, label='plant_size'
+    )
+
+    def _area_mm2_from_px(px_area: int):
+        if hasattr(cfg, "MM_PER_PX") and cfg.MM_PER_PX:
+            mm_per_px = float(cfg.MM_PER_PX)
+            return float(px_area) * (mm_per_px ** 2)
+        if hasattr(cfg, "DPI") and cfg.DPI:
+            px_per_mm = float(cfg.DPI) / 25.4
+            return float(px_area) / (px_per_mm ** 2)
+        return None
+
+    mm2_total = _area_mm2_from_px(plant_size)
+    if mm2_total is not None:
+        pcv.outputs.add_observation(
+            sample='default', variable='plant_area_mm2',
+            trait='area', method='px_to_mm2', scale='mm2',
+            datatype=float, value=float(mm2_total), label='plant_area_mm2'
+        )
+        
     #Top view
     if cfg.VIEW == "top":
         _dbg("DEBUG entering TOP pipeline")
@@ -205,7 +206,6 @@ def run_one_image(rgb_img, filename):
                 raise RuntimeError("No objects detected for top view (auto).")
             
             # ====== ROW ORDER BY ZONES: TOP ROW FIRST, THEN BOTTOM (LEFT->RIGHT) ======
-            # กำหนดเส้นแบ่งเป็นสัดส่วนของความสูงภาพ หรือกำหนดเป็นพิกเซลก็ได้ (ตั้งค่าได้ใน config)
             H = rgb_img.shape[0]
             split_ratio = float(getattr(cfg, "TOP_SPLIT_Y_RATIO", 0.50))   # 0.50 = ครึ่งภาพ
             split_y_px  = int(getattr(cfg, "TOP_SPLIT_Y_PX", split_ratio * H))
@@ -429,7 +429,7 @@ def run_one_image(rgb_img, filename):
                     sub_img = rgb_img[y:y+h, x:x+w].copy()
                     union_mask_cropped = union_mask[y:y+h, x:x+w].copy()
                         
-                    sample = "top_partial_merged"
+                    sample = "top"
                     eff_r = int(max(4, round(0.45 * min(w, h))))
                     
                     with _global_lock:
@@ -922,13 +922,6 @@ def process_one(path: Path, out_dir: Path):
             flat[col] = record.get('value', None)
     flat.update(extra)
     
-    #add Pot ID
-    pot_val = getattr(cfg, "POT_ID", None)
-    if pot_val is not None:
-        try:
-            flat["Pot_id"] = int(pot_val)
-        except Exception:
-            flat["Pot_id"] = str(pot_val)
     
     area_values = [v for k, v in flat.items() 
                    if isinstance(v, (int, float)) 
@@ -955,13 +948,13 @@ def process_one(path: Path, out_dir: Path):
         flat["mask_saved"] = True
         with open(out_json, 'w', encoding='utf-8') as f:
             json.dump(flat, f, ensure_ascii=False, indent=2)'''
-    if getattr(cfg, "ENABLE_THINGSBOARD", False):
+    if getattr(cfg, "ENABLE_THINGSBOARD", True):
         try:
             publish_data(out_json)
             print(f"Published data from {out_json} to ThingsBoard.")
         except Exception as e:
             print(f"Failed to publish data from {out_json} to ThingsBoard: {e}")
-    return str(out_json)  # ย้ายออกมา
+    return str(out_json)
 
 # ฟังก์ชันสำหรับประมวลผลหลายไฟล์ด้วย multiprocessing
 def process_multiple(paths, out_dir):
