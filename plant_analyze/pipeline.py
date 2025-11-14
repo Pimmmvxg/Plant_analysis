@@ -942,12 +942,12 @@ def process_one(path: Path, out_dir: Path):
         json.dump(flat, f, ensure_ascii=False, indent=2)
         
     # Optional mask save
-    '''if cfg.SAVE_MASK and mask is not None:
+    if cfg.SAVE_MASK and mask is not None:
         (out_dir / "processed").mkdir(exist_ok=True, parents=True)
         pcv.print_image(img=mask, filename=str(out_dir / "processed" / f"{Path(filename).stem}_mask.png"))
         flat["mask_saved"] = True
         with open(out_json, 'w', encoding='utf-8') as f:
-            json.dump(flat, f, ensure_ascii=False, indent=2)'''
+            json.dump(flat, f, ensure_ascii=False, indent=2)
     if getattr(cfg, "ENABLE_THINGSBOARD", True):
         try:
             publish_data(out_json)

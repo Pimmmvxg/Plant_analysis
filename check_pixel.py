@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 # โหลดภาพต้นฉบับ
-orig = cv2.imread(r"R:\01-Organize\01-Management\01-Data Center\Brisk\06-AI & Machine Learning (D0340)\04-IOT_Smartfarm\picture_original_topview_smartfarm\picture_topview_A_05112025_120038.jpg")
+orig = cv2.imread(r"R:\01-Organize\01-Management\01-Data Center\Brisk\06-AI & Machine Learning (D0340)\04-IOT_Smartfarm\picture_original_topview_smartfarm\picture_topview_F_12112025_110413.jpg")
 h0, w0 = orig.shape[:2]
 
 # resize สำหรับแสดงผล

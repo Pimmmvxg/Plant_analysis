@@ -1,8 +1,14 @@
 import argparse
 from pathlib import Path
+from ultralytics import YOLO
+import time
+import sys
 
 from plant_analyze import cli
 from plant_analyze import config as cfg  
+from plant_anomaly import infer_with_mask
+from plant_anomaly.infer_with_mask import CFG as anomaly_cfg
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -20,12 +26,67 @@ def main():
 
     if not input_path.exists():
         ap.error(f"Input path not found: {input_path}")
-
+        
+    print(f" - Input file: {input_path.name}")
+    
+    # Config Plant Analysis
     output_dir = Path(args.output) if args.output else None
-
     cfg.resolve_runtime(input_path=input_path, output_dir=output_dir, view=args.view)
-
-    cli.main()
+    
+    # Config & Load : Anomaly Detection
+    anomaly_out_dir = Path(cfg.OUTPUT_DIR) / "anomaly_results"
+    infer_with_mask.ensure_dir(anomaly_out_dir)
+    
+    print(f" - Loading YOLO model from: {anomaly_cfg['weights']}")
+    try:
+        anomaly_model = YOLO(anomaly_cfg["weights"])
+        if anomaly_cfg.get("force_class_names"):
+            anomaly_model.names = anomaly_cfg["force_class_names"]
+    except Exception as e:
+        print(f"[Pipeline ERROR] ไม่สามารถโหลดโมเดล YOLO ได้: {e}", file=sys.stderr)
+        sys.exit(1)
+        
+    # Run Plant analysis (Generate Mask)
+    print(f"กำลังวิเคราะห์พืช ...(Plant Analysis)...")
+    try:
+        cli.main()
+    except Exception as e:
+        print(f"[Pipeline EROR] Plant Analysis failed: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc() 
+        sys.exit(1) #Plant Analysis failed หยุดทำงาน
+    
+    print(f"Plant Analysis success")
+    
+    # find mask for anomaly detection
+    print(f"find mask for anomaly detection")
+    
+    # Path Mask
+    mask_path = Path(cfg.OUTPUT_DIR) / "processed" / f"{input_path.stem}_mask.png"
+    
+    print(f" - พบ {mask_path.name}")
+    
+    # Run Anomaly Detection
+    print(f"กำลังตรวจจับความผิดปกติ (Anomaly Detection)")
+    
+    try:
+        summary = infer_with_mask.infer_one(
+            model=anomaly_model,
+            cfg=anomaly_cfg,
+            image_path=input_path,
+            out_dir=anomaly_out_dir,
+            mask_input=mask_path
+        )
+    except Exception as e:
+        print(f"[Pipeline ERROR] Anomaly Detection failed: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+        
+    print(f"Anomaly detection success")
+    print(f"  - พบ {summary.get('num_detections', 0)} จุด")
+    print(f"  - บันทึกผลลัพธ์ไปที่: {anomaly_out_dir}")
+    print("="*50 + "\n")
 
 if __name__ == "__main__":
     main()

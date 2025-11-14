@@ -58,7 +58,7 @@ def ensure_binary(mask, normalize_orientation: bool = True):
             solidity = (a_obj / a_hull) if a_hull > 0 else 0.0
         else:
             solidity = 0.0
-
+            
          # ---------- VIEW-aware component preference ----------
         view = str(getattr(cfg, "VIEW", "top")).lower()
         if view == "top":

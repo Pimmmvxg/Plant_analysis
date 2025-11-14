@@ -9,7 +9,7 @@ THREADS = 1               # Number of threads to use for processing
 SAVE_MASK = True          # Save the mask image
 SAVE_TOP_OVERLAY = True
 SAVE_SIDE_ROIS_OVERVIEW = True  # เซฟรูปภาพรวมกรอบ ROI (#1, #2, ...)
-ENABLE_THINGSBOARD = False  # เปิด/ปิดการส่งข้อมูลขึ้น ThingsBoard
+ENABLE_THINGSBOARD = True  # เปิด/ปิดการส่งข้อมูลขึ้น ThingsBoard
 
 # I/O
 INPUT_PATH: Optional[Path] = None
@@ -183,14 +183,13 @@ def resolve_runtime(input_path: str | Path,
     else:
         MASK_SPEC = None  
 
-
 # TOP view parameters
 TOP_ROI_MODE = "manual"               # grid |auto | manual
 TOP_SUMMARY_MODE = "per_object"     # per_object | per roi
 TOP_MIN_PLANT_AREA = 4000      
 TOP_MERGE_GAP = 0             # px; มาก = รวมง่าย
 TOP_CLOSE_ITERS = 0            # ปิดรูเล็ก ๆ ก่อนจับกล่อง
-TOP_ROI_X, TOP_ROI_Y, TOP_ROI_W, TOP_ROI_H = 1500, 750, 1000, 1000
+TOP_ROI_X, TOP_ROI_Y, TOP_ROI_W, TOP_ROI_H = 1500, 650, 1000, 1000
 
 STEM_CONNECT_MODE = "cc_touch"
 STEM_CC_CLOSE_K   = 3
@@ -215,7 +214,6 @@ RESCUE_HUE_YELLOW         = (15, 45)   # OpenCV H: 0–179
 RESCUE_GEO_ITERS          = 40
 RESCUE_VERT_DILATE_K      = 9
 RESCUE_MIN_AREA_PX        = 800        # ปรับตามความละเอียดภาพ
-#POT_ID = 4
 
 # -------------------------------------------------
 # SIDE view parameters (rectangle ROI)
@@ -243,7 +241,7 @@ SIDE_V_MAX = 255
 CHECKER_SQUARE_MM = 12.0 # Size of one square in checkerboard (mm)
 RECT_SIZE_MM = (48, 48) # (w, h) ของสี่เหลี่ยมอ้างอิงจริง (mm)
 CHECKER_PATTERN = (3, 3)
-FALLBACK_MM_PER_PX = 48.0 / 645.0
+FALLBACK_MM_PER_PX = 48.0 / 490.0  # mm/px; กรณีไม่พบ checkerboard   
 
 # -------------------------------------------------
 # Measurement parameters side view

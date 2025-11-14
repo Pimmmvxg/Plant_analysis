@@ -2,7 +2,7 @@ import cv2, numpy as np, math, json
 from pathlib import Path
 from statistics import median
 
-IMG_PATH = r"R:\01-Organize\01-Management\01-Data Center\Brisk\06-AI & Machine Learning (D0340)\04-IOT_Smartfarm\picture_original_topview_smartfarm\picture_topview_02102025_151655.jpg"  
+IMG_PATH = r"R:\01-Organize\01-Management\01-Data Center\Brisk\06-AI & Machine Learning (D0340)\04-IOT_Smartfarm\picture_original_sideview_smartfarm\picture_sideview_F_11112025_160434.jpg"  
 RECT_W_MM = 48.0   # กว้างจริงของสี่เหลี่ยม (mm)  <-- แก้ให้ตรงของจริง
 RECT_H_MM = 48.0   # สูงจริงของสี่เหลี่ยม (mm)   <-- แก้ให้ตรงของจริง
 
@@ -14,6 +14,7 @@ MIN_AREA = 20000           # พื้นที่คอนทัวร์ขั
 EPS_FRACTION = 0.04       # epsilon ของ approxPolyDP 
 RECT_TOL = 0.6            # ยอมให้ aspect ratio เพี้ยนจากของจริงได้ 
 MIN_RECTANGULARITY = 0.3  # area / (w*h) ขั้นต่ำ
+MAX_AREA = 1000000          # กรองคอนทัวร์ที่ใหญ่เกินไป (px^2)
 
 def order_box(pts4):
     # รับ 4 จุด (x,y) -> เรียงเป็น TL, TR, BR, BL
