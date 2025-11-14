@@ -3,12 +3,19 @@ from pathlib import Path
 from ultralytics import YOLO
 import time
 import sys
+import json
 
 from plant_analyze import cli
 from plant_analyze import config as cfg  
 from plant_anomaly import infer_with_mask
 from plant_anomaly.infer_with_mask import CFG as anomaly_cfg
 
+try:
+    from Thingsboard.tb_client import ThingsboardClient, ACCESS_TOKEN
+    TB_CLIENT_ENABLED = True
+except ImportError:
+    print("ไม่พบ tb_client.py ข้ามการส่งข้อมูล")
+    TB_CLIENT_ENABLED = False
 
 def main():
     ap = argparse.ArgumentParser()
@@ -86,7 +93,29 @@ def main():
     print(f"Anomaly detection success")
     print(f"  - พบ {summary.get('num_detections', 0)} จุด")
     print(f"  - บันทึกผลลัพธ์ไปที่: {anomaly_out_dir}")
+        
+    if TB_CLIENT_ENABLED:    
+        print("ส่งข้อมูลความผิดปกติ ขึ้น Thingsboard")
+        tb_client = None
+        try:
+            telemetry_data = {
+                "anomaly_detections": summary.get('num_detections', 0)
+            }
+            tb_client = ThingsboardClient(token=ACCESS_TOKEN)
+            tb_client.publish_telemetry(telemetry_data)
+            
+            print(f"send data success")
+        
+        except Exception as e:
+            print(f"send data failed:{e}", file=sys.stderr)
+
+        finally:
+            if tb_client:
+                tb_client.stop()
+                
     print("="*50 + "\n")
+    
+    
 
 if __name__ == "__main__":
     main()

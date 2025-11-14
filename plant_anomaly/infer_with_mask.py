@@ -28,7 +28,7 @@ CFG = {
 
     # ---- Inference ----
     "imgsz": 1024,           # เพิ่มเพื่อเห็นรอยเล็ก
-    "conf": 0.2,            # ค่าความมั่นใจขั้นต่ำ
+    "conf": 0.3,            # ค่าความมั่นใจขั้นต่ำ
     "iou": 0.6,
     "max_det": 500,
     "device": 0,             # 0=GPU ตัวแรก, "cpu"=ซีพียู
@@ -222,7 +222,7 @@ def constrain_results_to_mask(r0, fg_mask_crop: np.ndarray, min_overlap=0.3, min
         return r0
     
     md = (r0.masks.data > 0.35).detach().cpu().numpy().astype(np.uint8)
-    if hasattr(r0.masks, "orig_shape"):
+    if hasattr(r0.masks, "orig_shape") and r0.masks.orig_shape is not None:
         oh, ow = r0.masks.orig_shape
     else:
         oh, ow = H, W

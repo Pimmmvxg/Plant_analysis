@@ -16,6 +16,10 @@ class ThingsboardClient:
     def publish_attributes(self, attributes: dict):
         self.client.publish("v1/devices/me/attributes", json.dumps(attributes), qos=1)
         print("Published attributes:", attributes)
+        
+    def publish_telemetry(self, telemetry: dict):
+        self.client.publish("v1/devices/me/telemetry", json.dumps(telemetry), qos=1)
+        print("Published telemetry:", telemetry)
 
     def stop(self):
         self.client.loop_stop()
